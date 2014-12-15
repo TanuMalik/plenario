@@ -144,18 +144,15 @@ def meta():
     for m in metas.all():
         keys = m.as_dict()
 
-        if dataset_name:
-            curr_dataset_name = keys['dataset_name']
+        curr_dataset_name = keys['dataset_name']
 
-            num_rows = get_num_rows(curr_dataset_name)
-            num_weather_observations = get_num_weather_observations(curr_dataset_name)
-            num_rows_w_censusblocks = get_num_rows_w_censusblocks(curr_dataset_name)
+        num_rows = get_num_rows(curr_dataset_name)
+        num_weather_observations = get_num_weather_observations(curr_dataset_name)
+        num_rows_w_censusblocks = get_num_rows_w_censusblocks(curr_dataset_name)
 
-            # If the caller specified specific datasets, add this extra info
-            
-            keys['num_rows'] = num_rows
-            keys['num_weather_observations'] = num_weather_observations
-            keys['num_rows_w_censusblocks'] = num_rows_w_censusblocks
+        keys['num_rows'] = num_rows
+        keys['num_weather_observations'] = num_weather_observations
+        keys['num_rows_w_censusblocks'] = num_rows_w_censusblocks
         
         for e in METATABLE_KEYS_TO_EXCLUDE: del keys[e]
         resp['objects'].append(keys)
