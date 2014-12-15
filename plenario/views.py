@@ -3,6 +3,7 @@ from flask import make_response, request, redirect, url_for, render_template, cu
 from plenario.models import MasterTable, MetaTable, User
 from plenario.database import session, Base, app_engine as engine
 from plenario.utils.helpers import get_socrata_data_info, iter_column, send_mail, slugify
+from plenario.utils.helpers import get_num_rows, get_num_weather_observations, get_num_rows_w_censusblocks
 from plenario.tasks import update_dataset as update_dataset_task, \
     delete_dataset as delete_dataset_task, add_dataset as add_dataset_task
 from flask_login import login_required
@@ -456,23 +457,11 @@ def edit_dataset(source_url_hash):
             fieldnames = table.columns.keys()
             pk_name  =[p.name for p in table.primary_key][0]
             pk = table.c[pk_name]
-            num_rows = session.query(pk).count()
-
-            dat_master = Table('dat_master', Base.metadata, autoload=True, autoload_with=engine)
-
-            sel = session.query(func.count(dat_master.c.master_row_id)).filter(and_(dat_master.c.dataset_name==meta.dataset_name,
-                                                                                    dat_master.c.dataset_row_id==pk,
-                                                                                    dat_master.c.weather_observation_id.isnot(None)))
-
-            num_weather_observations = sel.first()[0]
-
-            sel = session.query(func.count(dat_master.c.master_row_id)).filter(and_(dat_master.c.dataset_name==meta.dataset_name,
-                                                                                    dat_master.c.dataset_row_id==pk,
-                                                                                    dat_master.c.census_block.isnot(None)))
-
-            num_rows_w_censusblocks = sel.first()[0]
-
             
+            num_rows = get_num_rows(meta.dataset_name)
+            num_weather_observations = get_num_weather_observations(meta.dataset_name)
+            num_rows_w_censusblocks = get_num_rows_w_censusblocks(meta.dataset_name)
+                        
         except sqlalchemy.exc.NoSuchTableError, e:
             # dataset has been approved, but perhaps still processing.
             pass

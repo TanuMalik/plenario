@@ -9,9 +9,43 @@ from plenario.utils.typeinference import normalize_column_type
 from flask_mail import Mail, Message
 from plenario.settings import MAIL_DISPLAY_NAME, MAIL_USERNAME, ADMIN_EMAIL
 from smtplib import SMTPAuthenticationError
+from sqlalchemy import Table, func, and_
+from plenario.database import session, Base, app_engine as engine
 
 mail = Mail()
 
+def _get_pk(dataset_name):
+    table_name = 'dat_%s' % dataset_name
+            
+    table = Table(table_name, Base.metadata,
+                  autoload=True, autoload_with=engine)
+    fieldnames = table.columns.keys()
+    pk_name  =[p.name for p in table.primary_key][0]
+    pk = table.c[pk_name]
+    return pk
+
+def get_num_rows(dataset_name):
+    pk = _get_pk(dataset_name)
+    num_rows = session.query(pk).count()
+    return num_rows
+
+def get_num_weather_observations(dataset_name):
+    dat_master = Table('dat_master', Base.metadata, autoload=True, autoload_with=engine)
+    pk = _get_pk(dataset_name)    
+    sel = session.query(func.count(dat_master.c.master_row_id)).filter(and_(dat_master.c.dataset_name==dataset_name,
+                                                                            dat_master.c.dataset_row_id==pk,
+                                                                            dat_master.c.weather_observation_id.isnot(None)))
+    num_weather_observations = sel.first()[0]
+    return num_weather_observations
+    
+def get_num_rows_w_censusblocks(dataset_name):
+    dat_master = Table('dat_master', Base.metadata, autoload=True, autoload_with=engine)
+    pk = _get_pk(dataset_name)    
+    sel = session.query(func.count(dat_master.c.master_row_id)).filter(and_(dat_master.c.dataset_name==dataset_name,
+                                                                            dat_master.c.dataset_row_id==pk,
+                                                                            dat_master.c.census_block.isnot(None)))
+    num_rows_w_censusblocks = sel.first()[0]
+    return num_rows_w_censusblocks
 
 def iter_column(idx, f):
     f.seek(0)
