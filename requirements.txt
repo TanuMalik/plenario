@@ -19,3 +19,4 @@ pytz
 datetime_truncate
 pyshp
 Flask-Mail
+BeautifulSoup4

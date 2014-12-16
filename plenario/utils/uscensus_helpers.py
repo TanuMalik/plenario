@@ -1,6 +1,14 @@
+import sys
+import urllib2
+import zipfile
+import re
+import sqlalchemy 
+
+from bs4 import BeautifulSoup
+
 from plenario.utils.shapefile_helpers import PlenarioShapeETL
 
-censusblocks_url = 'http://www2.census.gov/geo/tiger/TIGER2010/TABBLOCK/'
+censusblocks_url = 'http://www2.census.gov/geo/tiger/TIGER2010/TABBLOCK/2010/'
 
 state_mapping =  [
 ('01','Alabama'),
@@ -60,6 +68,35 @@ state_mapping =  [
 ('55','Wisconsin'),
 ('56','Wyoming')]
 
+def _uscensusblocks_get_all_census_hrefs():
+        html = urllib2.urlopen(censusblocks_url).read()
+        soup=BeautifulSoup(html)
+        hrefs = [a.attrs.get('href') for a in soup.select('td a')]
+        return hrefs
+
+def _uscensusblocks_get_all_state_codes():
+        # basically go through this list and for all files like 'tl_2010_01_tabblock.zip' , find 
+        # all files like tl_2010_01[0-9][0-9][0-9]_tabblock.zip and append them to a list
+        hrefs = _uscensusblocks_get_all_census_hrefs()
+        prefix ='tl_2010_([0-9][0-9])_.*'
+        state_codes = []
+        for href in hrefs:
+                m= re.search(prefix, href)
+                if (m):
+                        state_code = m.group(1)
+                        state_codes.append(state_code)
+        return sorted(state_codes)
+
+
+def _uscensusblocks_get_all_county_zipfiles(state_num_str):
+        hrefs = _uscensusblocks_get_all_census_hrefs()
+	ret_list = []
+	for href in hrefs:
+		m = re.search('tl_2010_%s([0-9][0-9][0-9])_.*' % state_num_str, href)
+		if (m):
+			ret_list.append(href)	
+	return ret_list
+
 def uscensusblocks_add_state_byname(state_name):
     state_name.lower()
     state_mapping_dict = dict(state_mapping)
@@ -70,15 +107,32 @@ def uscensusblocks_add_state_byname(state_name):
         print "State not found: '%s'" % state_name
 
 def uscensusblocks_add_state(state_id):
-    d= {'dataset_name': 'census_blocks', 'business_key': 'geoid10', 'source_url': censusblocks_url + '2010/tl_2010_%s_tabblock10.zip' % state_id}
-    e = PlenarioShapeETL(d)
-    e._download()
-    e._load_shapefile()
-    e._get_or_create_table()
-    e._insert_data()
+    zip_list = _uscensusblocks_get_all_county_zipfiles(state_id)
+    
+    for fname in zip_list:
+        url = 'http://www2.census.gov/geo/tiger/TIGER2010/TABBLOCK/2010/%s' % fname
+        d = {'dataset_name': 'census_blocks', 'business_key': 'geoid10', 'source_url': url}
+        #print "doing d", d
+        e = PlenarioShapeETL(d)
+        #print "downloading"
+        e._download()
+        try:
+            #print "loading shapefile"
+            e._load_shapefile()
+        except zipfile.BadZipfile, e:
+            #print "no data found for %s, skipping" % url
+            continue
+        #print "getting/creating table"
+        e._get_or_create_table()
+        #print "inserting data"
+        try:
+            e._insert_data()
+        except sqlalchemy.exc.IntegrityError, e:
+            print "got integrity error, skipping", e
+        #print "done inserting data"
     
 def uscensusblocks_add_all():
     for (sid, sname) in state_mapping:
-        print "adding censusblocks for ", (sid, sname)
+        #print "adding censusblocks for ", (sid, sname)
         uscensus_add_state(sid)
 
