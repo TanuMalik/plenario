@@ -6,7 +6,8 @@ from plenario.utils.etl import PlenarioETL
 from init_db import init_master_meta_user
 from sqlalchemy import Table, MetaData
 from sqlalchemy.exc import NoSuchTableError
-
+from plenario import create_app
+import json
 
 def ingest_online_from_fixture(fixture_meta):
         md = MetaTable(**fixture_meta)
@@ -58,6 +59,59 @@ class TimeseriesRegressionTests(unittest.TestCase):
         ingest_online_from_fixture(flu_shot_meta)
         ingest_online_from_fixture(landmarks_meta)
 
-    def test_basics(self):
-        pass
+        cls.app = create_app().test_client()
+
+    def flu_agg(self, agg_type, expected_counts):
+        # Always query from 9-22 to 10-1
+        query = '/v1/api/timeseries/?obs_date__ge=2013-09-22&obs_date__le=2013-10-1&agg=' + agg_type
+        resp = self.app.get(query)
+        response_data = json.loads(resp.data)
+
+        # Only the flu dataset should have records in this range
+        self.assertEqual(len(response_data['objects']), 1)
+        timeseries = response_data['objects'][0]
+        self.assertEqual(timeseries['dataset_name'], 'flu_shot_clinics')
+
+        # Extract the number of flu clinics per time unit
+        counts = [time_unit['count'] for time_unit in timeseries['items']]
+        self.assertEqual(expected_counts, counts)
+
+    def test_day_agg(self):
+        # 1 clinic on the 22nd. No clinics on the 23rd...
+        expected_counts = [1, 0, 0, 0, 0, 0, 1, 0, 1, 2]
+        self.flu_agg('day', expected_counts)
+
+    def test_week_agg(self):
+        # Weeks start from the beginning of the year, not the date specified in the query.
+        # So even though we're only asking for 10 days,
+        # we intersect with 3 weeks.
+        expected_counts = [1, 1, 3]
+        self.flu_agg('week', expected_counts)
+
+    def test_month_agg(self):
+        # 3 clinics in the range we specified in September, 2 in October.
+        expected_counts = [3, 2]
+        self.flu_agg('month', expected_counts)
+
+    def test_year_agg(self):
+        # 5 clinics when grouping by year.
+        expected_counts = [5]
+        self.flu_agg('year', expected_counts)
+
+    def test_two_datasets(self):
+        # Query over all of 2012 and 2013, aggregating by year.
+        resp = self.app.get('/v1/api/timeseries/?obs_date__ge=2012-01-01&obs_date__le=2013-12-31&agg=year')
+        response_data = json.loads(resp.data)
+
+        # The order of the datasets isn't guaranteed, so preprocess the response
+        # so we can grab each dataset's timeseries by name.
+        name_to_series = {}
+        for obj in response_data['objects']:
+            timeseries = [year['count'] for year in obj['items']]
+            name_to_series[obj['dataset_name']] = timeseries
+
+        # No flu shot clinics in 2012, 65 in 2013.
+        self.assertEqual(name_to_series['flu_shot_clinics'], [0, 65])
+        # 7 landmarks declared in 2012, 0 in 2013.
+        self.assertEqual(name_to_series['landmarks'], [7, 0])
 
