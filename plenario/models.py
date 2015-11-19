@@ -84,9 +84,8 @@ class MetaTable(Base):
         t = self.point_table
         return select([func.count(t.c.point_id)])\
             .where(and_(t.c.point_date > start,
-                        t.c.point_date < end))
-
-
+                        t.c.point_date < end,
+                        func.ST_Within(t.c.geom, func.ST_GeomFromGeoJSON(geom))))
 
 
 class MasterTable(Base):
