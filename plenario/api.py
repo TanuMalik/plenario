@@ -497,15 +497,7 @@ def dataset():
         q = '''
             SELECT m.dataset_name
             FROM meta_master AS m 
-            LEFT JOIN celery_taskmeta AS c 
-              ON c.id = (
-                SELECT id FROM celery_taskmeta 
-                WHERE task_id = ANY(m.result_ids) 
-                ORDER BY date_done DESC 
-                LIMIT 1
-              )
             WHERE m.approved_status = 'true'
-            AND c.status = 'SUCCESS'
         '''
         with engine.begin() as c:
             dataset_names = [d[0] for d in c.execute(q)]
