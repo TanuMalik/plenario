@@ -2,11 +2,6 @@ from __future__ import with_statement
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from logging.config import fileConfig
-import os, sys
-
-pwd = os.path.dirname(os.path.realpath(__file__))
-plenario_path = os.path.join(pwd, '../..')
-sys.path.append(str(plenario_path))
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -11,6 +11,12 @@ revision = '4e960796230e'
 down_revision = None
 branch_labels = None
 depends_on = None
+import os, sys
+
+pwd = os.path.dirname(os.path.realpath(__file__))
+plenario_path = os.path.join(pwd, '../../..')
+print plenario_path
+sys.path.append(str(plenario_path))
 
 from alembic import op
 from plenario.models import MetaTable

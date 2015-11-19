@@ -2,7 +2,7 @@ from uuid import uuid4
 from datetime import datetime
 
 from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, \
-    Text, BigInteger, func
+    Text, BigInteger, func, Table, select, and_
 from sqlalchemy.dialects.postgresql import TIMESTAMP, DOUBLE_PRECISION, ARRAY
 from geoalchemy2 import Geometry
 from sqlalchemy.orm import synonym
@@ -45,8 +45,48 @@ class MetaTable(Base):
     def __repr__(self):
         return '<MetaTable %r (%r)>' % (self.human_name, self.dataset_name)
 
+    #def __init__(self):
+    #    self.point_table = None
+
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+    @property
+    def point_table(self):
+        try:
+            return self._point_table
+        except AttributeError:
+            self._point_table = Table('dat_' + self.dataset_name, Base.metadata, autoload=True, extend_existing=True)
+            return self._point_table
+
+    # Return a map like
+    # {dataset_name_1: {timeunit1: count, timeunit2: count...},
+    #  dataset_name_2: {...} ...
+    # }
+    @classmethod
+    def timeseries_all(cls, table_names, agg_unit, start, end, geom=None):
+        # For now, assuming everything has a good value
+        # For each table in table_names, generate a query to be unioned
+        #
+        pass
+
+    # Information about all point datasets
+    @classmethod
+    def index(cls):
+        pass
+
+    @classmethod
+    def get_by_dataset_name(cls, name):
+        return session.query(cls).filter(cls.dataset_name == name).first()
+
+    # Return query to execute or union
+    def timeseries(self, agg_unit, start, end, geom=None):
+        t = self.point_table
+        return select([func.count(t.c.point_id)])\
+            .where(and_(t.c.point_date > start,
+                        t.c.point_date < end))
+
+
 
 
 class MasterTable(Base):
