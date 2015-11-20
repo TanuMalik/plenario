@@ -1,11 +1,17 @@
 var AboutView = Backbone.View.extend({
+    el: '#list-view',
+
     events: {
         'click .about-detail': 'detailView'
     },
+
     initialize: function(){
+        console.log("Initializing About View");
         this.render();
     },
+
     render: function(){
+        console.log("Rendering About View");
         $('#list-view').show();
         $('#detail-view').hide();
         this.$el.empty();
@@ -17,7 +23,7 @@ var AboutView = Backbone.View.extend({
                 self.$el.spin(false);
                 self.$el.html(template_cache('aboutTemplate', {datasets:resp}));
                 var dataObjs = {}
-                // console.log(resp);
+                //console.log(resp);
                 $.each(resp, function(i, obj){
                     dataObjs[obj['dataset_name']] = obj;
                 })
@@ -44,8 +50,8 @@ var AboutView = Backbone.View.extend({
         })
     },
     detailView: function(e){
-        // console.log('about-view detailView')
-        var query = {};
+        //store the information in the query model instead
+        console.log('about-view detailView')
         var start = $('#start-date-filter').val();
         var end = $('#end-date-filter').val();
         start = moment(start);
@@ -54,19 +60,17 @@ var AboutView = Backbone.View.extend({
         if(!end){ end = moment(); }
         start = start.startOf('day').format('YYYY/MM/DD');
         end = end.endOf('day').format('YYYY/MM/DD');
-
-        query['obs_date__le'] = end;
-        query['obs_date__ge'] = start;
-        query['agg'] = $('#time-agg-filter').val();
-
-        var dataset_name = $(e.target).data('dataset_name')
-        // console.log(dataset_name);
-        query['dataset_name'] = dataset_name
-
+        this.model.set({obs_date__le:end, obs_date__ge:start,agg:$('#time-agg-filter').val()});
+        var dataset_name = $(e.target).data('dataset_name');
+        this.model.set('dataset_name',dataset_name);
+        this.model.set('resolution','500');
+        console.log(this.model);
         this.undelegateEvents();
         $('#map-view').empty();
-        new DetailView({el: '#map-view', attributes: {query: query, meta: this.datasetsObj[dataset_name]}})
-        var route = 'detail/' + $.param(query);
+        console.log("initializaing About-view Detail-view");
+        var meta = this.datasetsObj[dataset_name];
+        new DetailView(this.model,meta);
+        var route = 'detail/' + $.param(this.model.attributes);
         _gaq.push(['_trackPageview', route]);
         router.navigate(route)
     }

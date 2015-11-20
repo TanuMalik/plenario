@@ -1,5 +1,6 @@
 var ErrorView = Backbone.View.extend({
     initialize: function(){
+        console.log("initializing error view");
         this.render()
     },
     render: function(){

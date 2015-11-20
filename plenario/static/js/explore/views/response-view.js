@@ -1,15 +1,21 @@
 var ResponseView = Backbone.View.extend({
+    el:'#list-view',
+
     events: {
         'click .detail': 'detailView'
     },
-    initialize: function(){
+
+    initialize: function(query){
+        console.log("Initializing Response View");
+        this.query = query;
         this.render();
     },
+
     render: function(){
+        console.log("Rendering Response View");
         $('#list-view').show();
         $('#detail-view').hide();
         var self = this;
-        this.query = this.attributes.query;
         if (typeof this.explore !== 'undefined'){
             this.explore.remove();
         }
@@ -19,12 +25,14 @@ var ResponseView = Backbone.View.extend({
         this.getResults();
     },
     detailView: function(e){
-        // console.log('response-view detailView')
-        var dataset_name = $(e.target).data('dataset_name')
-        this.query['dataset_name'] = dataset_name
+        console.log('Response-View DetailView')
+        var dataset_name = $(e.target).data('dataset_name');
+        //console.log(this.query);
+        this.query.set('dataset_name',dataset_name);
         this.undelegateEvents();
         $('#map-view').empty();
-        new DetailView({el: '#map-view', attributes: {query: this.query, meta: this.meta[dataset_name]}})
+        var meta = this.meta[dataset_name];
+        new DetailView(this.query,meta);
         var route = 'detail/' + $.param(this.query)
         _gaq.push(['_trackPageview', route]);
         router.navigate(route)
@@ -36,9 +44,10 @@ var ResponseView = Backbone.View.extend({
                 self.$el.spin(false);
                 var results = resp[0].objects;
                 var results_meta = resp[0]['meta']
-                var m = meta_resp[0]['objects']
+                var m = meta_resp[0]['objects'] //all datasets
                 var objects = []
                 self.meta = {}
+                console.log(m);
                 $.each(m, function(i, obj){
                     self.meta[obj.dataset_name] = obj
                 })
@@ -49,14 +58,14 @@ var ResponseView = Backbone.View.extend({
                         obj['values'].push([moment(o.datetime + "+0000").valueOf(),o.count]);
                         obj['count'] += o.count;
                     });
-                    // console.log(obj['values'])
+                    //console.log(obj['values'])
                     obj['meta'] = self.meta[obj['dataset_name']]
                     objects.push(obj)
                 });
 
                 self.$el.html(template_cache('datasetTable', {
                     objects: objects,
-                    query: self.query
+                    query: self.query.attributes
                 }));
 
                 $.each(objects, function(i, obj){
@@ -85,12 +94,17 @@ var ResponseView = Backbone.View.extend({
             new ErrorView({el: '#errorModal', model: error});
         });
     },
+
+    //the api only takes in location, ob dates, and aggregation
     resultsFetcher: function(){
         var self = this;
+        var q = self.query.attributes;
+        delete q['resolution'];
+        delete q['dataset_name'];
         return $.ajax({
             url: '/v1/api/timeseries/',
             dataType: 'json',
-            data: self.query
+            data: self.query.attributes
         });
     },
     metaFetcher: function(){
