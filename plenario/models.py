@@ -6,8 +6,11 @@ from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, \
 from sqlalchemy.dialects.postgresql import TIMESTAMP, DOUBLE_PRECISION, ARRAY
 from geoalchemy2 import Geometry
 from sqlalchemy.orm import synonym
+import sqlalchemy as sa
 from sqlalchemy.sql import text
 from flask_bcrypt import Bcrypt
+from itertools import groupby
+
 
 from plenario.database import session, Base
 from plenario.utils.helpers import slugify
@@ -68,11 +71,30 @@ class MetaTable(Base):
     def timeseries_all(cls, table_names, agg_unit, start, end, geom=None):
         # For now, assuming everything has a good value
         # For each table in table_names, generate a query to be unioned
-        #
 
+        selects = []
         for name in table_names:
-            table = cls.get_by_dataset_name(name).point_table
-            sel = table.timeseries(agg_unit, start, end, geom)
+            table = cls.get_by_dataset_name(name)
+            ts_select = table.timeseries(agg_unit, start, end, geom)
+            selects.append(ts_select)
+
+        panel_query = sa.union(*selects)\
+                        .order_by('dataset_name')\
+                        .order_by('time_bucket')
+        panel_vals = session.execute(panel_query)
+
+        panel = []
+        for dataset_name, ts in groupby(panel_vals, lambda row: row.dataset_name):
+            ts_dict = {'name': dataset_name,
+                       'items': []}
+            for row in ts:
+                ts_dict['items'].append({
+                    'datetime': row.time_bucket,
+                    'count':    row.count
+                })
+            panel.append(ts_dict)
+
+        return panel
 
     # Information about all point datasets
     @classmethod
@@ -86,12 +108,12 @@ class MetaTable(Base):
     # Return select statement to execute or union
     def timeseries(self, agg_unit, start, end, geom=None):
         t = self.point_table
-        sel = select([func.count(t.c.point_id),  # Count unique records
-                      func.date_trunc(agg_unit, t.c.point_date).label('time_buckets'),
+        sel = select([func.count(t.c.point_id).label('count'),  # Count unique records
+                      func.date_trunc(agg_unit, t.c.point_date).label('time_bucket'),
                       text("'{}' AS dataset_name".format(self.dataset_name))])\
-            .where(and_(t.c.point_date > start,  
+            .where(and_(t.c.point_date > start,
                         t.c.point_date < end))\
-            .group_by('time_buckets')  # aggregate by time unit
+            .group_by('time_bucket')  # aggregate by time unit
 
         if geom:
             # Only include locations that fall in the query geom
