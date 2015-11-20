@@ -6,12 +6,12 @@ var AboutView = Backbone.View.extend({
     },
 
     initialize: function(){
-        console.log("Initializing About View");
+        //console.log("Initializing About View");
         this.render();
     },
 
     render: function(){
-        console.log("Rendering About View");
+        //console.log("Rendering About View");
         $('#list-view').show();
         $('#detail-view').hide();
         this.$el.empty();
@@ -52,22 +52,14 @@ var AboutView = Backbone.View.extend({
     detailView: function(e){
         //store the information in the query model instead
         console.log('about-view detailView')
-        var start = $('#start-date-filter').val();
-        var end = $('#end-date-filter').val();
-        start = moment(start);
-        if (!start){ start = moment().subtract('days', 90); }
-        end = moment(end)
-        if(!end){ end = moment(); }
-        start = start.startOf('day').format('YYYY/MM/DD');
-        end = end.endOf('day').format('YYYY/MM/DD');
-        this.model.set({obs_date__le:end, obs_date__ge:start,agg:$('#time-agg-filter').val()});
+        this.model.setStart();
+        this.model.setEnd();
+        this.model.set('agg',$('#time-agg-filter').val());
         var dataset_name = $(e.target).data('dataset_name');
         this.model.set('dataset_name',dataset_name);
-        this.model.set('resolution','500');
-        console.log(this.model);
+        this.model.unset('location_geom__within');
         this.undelegateEvents();
         $('#map-view').empty();
-        console.log("initializaing About-view Detail-view");
         var meta = this.datasetsObj[dataset_name];
         new DetailView(this.model,meta);
         var route = 'detail/' + $.param(this.model.attributes);

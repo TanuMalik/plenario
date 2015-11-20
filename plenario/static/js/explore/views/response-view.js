@@ -6,13 +6,13 @@ var ResponseView = Backbone.View.extend({
     },
 
     initialize: function(query){
-        console.log("Initializing Response View");
+        //console.log("Initializing Response View");
         this.query = query;
         this.render();
     },
 
     render: function(){
-        console.log("Rendering Response View");
+        //console.log("Rendering Response View");
         $('#list-view').show();
         $('#detail-view').hide();
         var self = this;
@@ -27,7 +27,6 @@ var ResponseView = Backbone.View.extend({
     detailView: function(e){
         console.log('Response-View DetailView')
         var dataset_name = $(e.target).data('dataset_name');
-        //console.log(this.query);
         this.query.set('dataset_name',dataset_name);
         this.undelegateEvents();
         $('#map-view').empty();
@@ -47,7 +46,7 @@ var ResponseView = Backbone.View.extend({
                 var m = meta_resp[0]['objects'] //all datasets
                 var objects = []
                 self.meta = {}
-                console.log(m);
+                //console.log(m);
                 $.each(m, function(i, obj){
                     self.meta[obj.dataset_name] = obj
                 })

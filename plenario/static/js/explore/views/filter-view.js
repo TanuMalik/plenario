@@ -9,12 +9,11 @@ var FilterView = Backbone.View.extend({
         console.log("Initializing Filter View");
         this.filter = filter;
         this.field_options = options;
-        console.log(this.filter);
-        console.log(this.field_options);
+        console.log(this.filter)
         this.render();
     },
     render: function(){
-        console.log("Rendering Filter View");
+        //console.log("Rendering Filter View");
         this.$el.append(_.template(get_template('filterTemplate'))(this.filter.attributes));
 
         var filter_dict_id = this.filter.get('id');

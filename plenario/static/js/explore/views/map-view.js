@@ -8,19 +8,11 @@ var MapView = Backbone.View.extend({
     },
 
     initialize: function(map_model, query) {
-        console.log("initializing a new map view");
+        //console.log("initializing a new map view");
         this.model = map_model;
         this.query = query;
-        //console.log(this.query);
-        //console.log(this.model);
         var start = moment().subtract('d', 90).format('MM/DD/YYYY');
         var end = moment().format('MM/DD/YYYY');
-        //
-        //if (this.attributes.resp && this.attributes.resp.query)
-        //{
-        //    start = moment(this.attributes.resp.query.obs_date__ge).format('MM/DD/YYYY');
-        //    end = moment(this.attributes.resp.query.obs_date__le).format('MM/DD/YYYY');
-        //}
 
         if (this.query.get('obs_date__ge') != '' && this.query.get('obs_date_le') != '' )
         {
@@ -44,10 +36,7 @@ var MapView = Backbone.View.extend({
     //},
 
     render: function() {
-        //console.log(this.model);
-        //console.log(map.drawnItems);
-        console.log("rendering map view");
-        //console.log(this.model);
+        //console.log("rendering map view");
         var self = this;
         var drawControl = new L.Control.Draw({
         edit: {
@@ -58,7 +47,6 @@ var MapView = Backbone.View.extend({
             marker: false
         }
         });
-        //console.log(drawControl);
         map.addControl(drawControl);
         map.on('draw:created', this.drawCreate);
         map.on('draw:drawstart', this.drawDelete);
@@ -79,9 +67,8 @@ var MapView = Backbone.View.extend({
                     });
 
         if (typeof this.model.attributes.dataLayer !== 'undefined'){
-            console.log("dataLayer is defined");
-            map.drawnItems.addLayer(geojson);
             console.log("there's a layer!");
+            map.drawnItems.addLayer(geojson);
             map.whenReady(function () {
                 window.setTimeout(function () {
                     map.fitBounds(geojson.getBounds());
@@ -103,7 +90,6 @@ var MapView = Backbone.View.extend({
         console.log("create");
         map.drawnItems.addLayer(e.layer);
         map.dataLayer = e.layer.toGeoJSON();
-
     },
     drawDelete: function(e){
         map.drawnItems.clearLayers();
@@ -140,16 +126,11 @@ var MapView = Backbone.View.extend({
             message = 'Your dates are not entered correctly. Please enter them in the format month/day/year.';
         }
         this.query.set({obs_date__le: end, obs_date__ge: start});
-        //    if (this.map.dataLayer){
-        //        query['location_geom__within'] = JSON.stringify(this.map.dataLayer);
-        //        this.map.fitBounds(this.map.drawnItems.getBounds());
-        //    }
+
         if (map.dataLayer) {
             this.query.set('location_geom__within',JSON.stringify(map.dataLayer));
             this.model.attributes.dataLayer = map.dataLayer;
-            //.model.set('dataLayer',JSON.stringify(map.dataLayer));
             map.fitBounds(map.drawnItems.getBounds());
-            //console.log(map.drawnItems.getBounds());
         }
 
         //else if (this.attributes.resp && this.attributes.resp.query.location_geom__within) {
@@ -161,7 +142,6 @@ var MapView = Backbone.View.extend({
             message = 'You must draw a shape on the map to continue your search.';
         }
         this.query.set('agg', $('#time-agg-filter').val());
-        //console.log(valid);
         if (valid) {
             //if (resp) {
             //    resp.undelegateEvents();

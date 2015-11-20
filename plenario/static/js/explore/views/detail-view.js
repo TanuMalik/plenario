@@ -11,9 +11,11 @@ var DetailView = Backbone.View.extend({
     initialize: function(query,meta){
         console.log("initializing DETAIL view");
         this.model = query;
+        console.log(this.model);
         this.meta = meta;
         this.filters = {};
-         this.collection = new filter_collection();
+        //this.collection = filter_collection();
+        //console.log(this.collection);
         var start = moment().subtract('d', 90).format('MM/DD/YYYY');
         var end = moment().format('MM/DD/YYYY');
 
@@ -256,7 +258,6 @@ var DetailView = Backbone.View.extend({
 
         if(valid){
             this.undelegateEvents();
-            console.log(query)
             new DetailView(query,this.meta);
             var route = 'detail/' + $.param(query)
             _gaq.push(['_trackPageview', route]);
@@ -274,7 +275,6 @@ var DetailView = Backbone.View.extend({
     backToExplorer: function(e){
         e.preventDefault();
         this.undelegateEvents();
-
         // delete filters and dataset name from query
        // delete points_query['dataset_name'];
         console.log(this.points_query);
