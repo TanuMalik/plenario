@@ -6,6 +6,7 @@ from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, \
 from sqlalchemy.dialects.postgresql import TIMESTAMP, DOUBLE_PRECISION, ARRAY
 from geoalchemy2 import Geometry
 from sqlalchemy.orm import synonym
+from sqlalchemy.sql import text
 from flask_bcrypt import Bcrypt
 
 from plenario.database import session, Base
@@ -68,7 +69,10 @@ class MetaTable(Base):
         # For now, assuming everything has a good value
         # For each table in table_names, generate a query to be unioned
         #
-        pass
+
+        for name in table_names:
+            table = cls.get_by_dataset_name(name).point_table
+            sel = table.timeseries(agg_unit, start, end, geom)
 
     # Information about all point datasets
     @classmethod
@@ -79,13 +83,21 @@ class MetaTable(Base):
     def get_by_dataset_name(cls, name):
         return session.query(cls).filter(cls.dataset_name == name).first()
 
-    # Return query to execute or union
+    # Return select statement to execute or union
     def timeseries(self, agg_unit, start, end, geom=None):
         t = self.point_table
-        return select([func.count(t.c.point_id)])\
-            .where(and_(t.c.point_date > start,
-                        t.c.point_date < end,
-                        func.ST_Within(t.c.geom, func.ST_GeomFromGeoJSON(geom))))
+        sel = select([func.count(t.c.point_id),  # Count unique records
+                      func.date_trunc(agg_unit, t.c.point_date).label('time_buckets'),
+                      text("'{}' AS dataset_name".format(self.dataset_name))])\
+            .where(and_(t.c.point_date > start,  
+                        t.c.point_date < end))\
+            .group_by('time_buckets')  # aggregate by time unit
+
+        if geom:
+            # Only include locations that fall in the query geom
+            sel = sel.where(func.ST_Within(t.c.geom, func.ST_GeomFromGeoJSON(geom)))
+
+        return sel
 
 
 class MasterTable(Base):
