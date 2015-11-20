@@ -28,13 +28,14 @@ var ResponseView = Backbone.View.extend({
         console.log('Response-View DetailView')
         var dataset_name = $(e.target).data('dataset_name');
         this.query.set('dataset_name',dataset_name);
+        //this.query.set('resolution','500');
         this.undelegateEvents();
         $('#map-view').empty();
         var meta = this.meta[dataset_name];
         new DetailView(this.query,meta);
-        var route = 'detail/' + $.param(this.query)
+        var route = 'detail/' + $.param(this.query);
         _gaq.push(['_trackPageview', route]);
-        router.navigate(route)
+        router.navigate(route);
     },
     getResults: function(){
         var self = this;
@@ -103,7 +104,7 @@ var ResponseView = Backbone.View.extend({
         return $.ajax({
             url: '/v1/api/timeseries/',
             dataType: 'json',
-            data: self.query.attributes
+            data: q
         });
     },
     metaFetcher: function(){

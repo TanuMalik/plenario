@@ -58,6 +58,8 @@ var AboutView = Backbone.View.extend({
         var dataset_name = $(e.target).data('dataset_name');
         this.model.set('dataset_name',dataset_name);
         this.model.unset('location_geom__within');
+        //this.model.set('resolution','500');
+        console.log(this.model);
         this.undelegateEvents();
         $('#map-view').empty();
         var meta = this.datasetsObj[dataset_name];

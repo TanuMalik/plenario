@@ -11,7 +11,6 @@ var DetailView = Backbone.View.extend({
     initialize: function(query,meta){
         console.log("initializing DETAIL view");
         this.model = query;
-        console.log(this.model);
         this.meta = meta;
         this.filters = {};
         //this.collection = filter_collection();
@@ -24,7 +23,6 @@ var DetailView = Backbone.View.extend({
             start = moment(this.model.get('obs_date__ge')).format('MM/DD/YYYY');
             end = moment(this.model.get('obs_date__le')).format('MM/DD/YYYY');
         }
-
         this.points_query = query;
         this.points_query.unset('resolution');
         this.$el.html(template_cache('detailTemplate', {query: this.model.attributes, points_query: this.points_query.attributes, meta: this.meta, start:start, end:end}));
@@ -177,6 +175,7 @@ var DetailView = Backbone.View.extend({
                 }
             }
         )
+
         //drawing time series.
         $("#detail-chart").spin('large');
         $.when(this.getTimeSeries()).then( function(resp){
@@ -213,33 +212,15 @@ var DetailView = Backbone.View.extend({
         if (this.model.get('location_geom__within')){
             query.set('location_geom__within', this.model.get('location_geom__within'));
         }
-
-        var start = $('#start-date-filter').val();
-        var end = $('#end-date-filter').val();
-        start = moment(start);
-        if (!start){
-            start = moment().subtract('days', 90);
-        }
-        end = moment(end)
-        if(!end){
-            end = moment();
-        }
         var valid = true;
-        if (start.isValid() && end.isValid()){
-            start = start.startOf('day').format('YYYY/MM/DD');
-            end = end.endOf('day').format('YYYY/MM/DD');
-        } else {
+        query.setStart();
+        query.setEnd();
+        if (!moment(query.get('obs_date__le')).isValid() && !moment(query.get('obs_date__ge')).isValid()){
             valid = false;
             message = 'Your dates are not entered correctly';
         }
-        query.set('obs_date__le', end);
-        query.set('obs_date__ge', start);
         query.set('agg', $('#time-agg-filter').val());
         query.set('resolution', $('#spatial-agg-filter').val());
-        //query['obs_date__le'] = end;
-        //query['obs_date__ge'] = start;
-        //query['agg'] = $('#time-agg-filter').val();
-        //query['resolution'] = $('#spatial-agg-filter').val();
 
         // update query from filters
         $(".filter_row").each(function (key, val) {
@@ -313,7 +294,7 @@ var DetailView = Backbone.View.extend({
     },
 
     getTimeSeries: function(){
-        var q = this.points_query.attributes;
+        var q = this.model.attributes;
         return $.ajax({
             url: '/v1/api/detail-aggregate/',
             dataType: 'json',

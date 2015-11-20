@@ -6,10 +6,10 @@ var FilterView = Backbone.View.extend({
     },
 
     initialize: function(filter, options){
-        console.log("Initializing Filter View");
+        //console.log("Initializing Filter View");
         this.filter = filter;
         this.field_options = options;
-        console.log(this.filter)
+        //console.log(this.filter)
         this.render();
     },
     render: function(){

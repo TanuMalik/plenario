@@ -9,8 +9,10 @@ var MapView = Backbone.View.extend({
 
     initialize: function(map_model, query) {
         //console.log("initializing a new map view");
+        //current problem: a new map is issued each time coming back to default. so response-map isn't working well
         this.model = map_model;
         this.query = query;
+
         var start = moment().subtract('d', 90).format('MM/DD/YYYY');
         var end = moment().format('MM/DD/YYYY');
 
@@ -20,7 +22,7 @@ var MapView = Backbone.View.extend({
             end = moment(this.query.get('obs_date__le')).format('MM/DD/YYYY');
         }
 
-
+        $('#time-agg-filter').val(this.query.get('agg'));
         this.$el.html(template_cache('mapTemplate',{end: end, start: start}));
         //render default map based on the model information
         map = L.map('map', this.model.get('map_options'))
@@ -37,6 +39,7 @@ var MapView = Backbone.View.extend({
 
     render: function() {
         //console.log("rendering map view");
+        console.log(this.query);
         var self = this;
         var drawControl = new L.Control.Draw({
         edit: {
@@ -67,7 +70,7 @@ var MapView = Backbone.View.extend({
                     });
 
         if (typeof this.model.attributes.dataLayer !== 'undefined'){
-            console.log("there's a layer!");
+            console.log("There's a layer!");
             map.drawnItems.addLayer(geojson);
             map.whenReady(function () {
                 window.setTimeout(function () {
@@ -104,50 +107,36 @@ var MapView = Backbone.View.extend({
         });
     },
     submitForm: function(e) {
-        console.log('map-view submit')
+        //console.log('map-view submit')
         console.log(this.query);
         var message = null;
-        var start = $('#start-date-filter').val();
-        var end = $('#end-date-filter').val();
-        start = moment(start);
-        if (!start) {
-            start = moment().subtract('days', 90);
-        }
-        end = moment(end)
-        if (!end) {
-            end = moment();
-        }
+        this.query.setStart();
+        this.query.setEnd();
         var valid = true;
-        if (start.isValid() && end.isValid()) {
-            start = start.startOf('day').format('YYYY/MM/DD');
-            end = end.endOf('day').format('YYYY/MM/DD');
-        } else {
+        if (!moment(query.get('obs_date__le')).isValid() && !moment(query.get('obs_date__ge')).isValid()){
             valid = false;
-            message = 'Your dates are not entered correctly. Please enter them in the format month/day/year.';
+            message = 'Your dates are not entered correctly';
         }
-        this.query.set({obs_date__le: end, obs_date__ge: start});
-
         if (map.dataLayer) {
             this.query.set('location_geom__within',JSON.stringify(map.dataLayer));
             this.model.attributes.dataLayer = map.dataLayer;
             map.fitBounds(map.drawnItems.getBounds());
         }
-
         //else if (this.attributes.resp && this.attributes.resp.query.location_geom__within) {
         //    query['location_geom__within'] = this.attributes.resp.query.location_geom__within
         //}
-
         else {
             valid = false;
             message = 'You must draw a shape on the map to continue your search.';
         }
         this.query.set('agg', $('#time-agg-filter').val());
+
         if (valid) {
             //if (resp) {
             //    resp.undelegateEvents();
             //}
             new ResponseView(this.query);
-            var route = "aggregate/" + $.param(query.attributes);
+            var route = "aggregate/" + $.param(this.query.attributes);
             _gaq.push(['_trackPageview', route]);
             router.navigate(route);
         } else {

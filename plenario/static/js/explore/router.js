@@ -2,7 +2,7 @@ var AppRouter = Backbone.Router.extend({
     routes: {
         "": "defaultRoute",
         "aggregate/:query": "aggregate",
-        "detail/:query": "detail",
+        "detail/:query": "detail"
         //"polygon/:polygonName": "polygon",
     },
      defaultRoute: function(){
