@@ -38,6 +38,7 @@ class MetaTable(Base):
     latitude = Column(String)
     longitude = Column(String)
     location = Column(String)
+    # approved_status is used as a bool
     approved_status = Column(String) # if False, then do not display without first getting administrator approval
     contributor_name = Column(String)
     contributor_organization = Column(String)
@@ -63,21 +64,19 @@ class MetaTable(Base):
             self._point_table = Table('dat_' + self.dataset_name, Base.metadata, autoload=True, extend_existing=True)
             return self._point_table
 
-    # Return a map like
-    # {dataset_name_1: {timeunit1: count, timeunit2: count...},
-    #  dataset_name_2: {...} ...
-    # }
+    # Return a list of [
+    # {'dataset_name': 'Foo',
+    # 'items': [{'datetime': dt, 'count': int}, ...] } ]
     @classmethod
     def timeseries_all(cls, table_names, agg_unit, start, end, geom=None):
-        # For now, assuming everything has a good value
         # For each table in table_names, generate a query to be unioned
-
         selects = []
         for name in table_names:
             table = cls.get_by_dataset_name(name)
             ts_select = table.timeseries(agg_unit, start, end, geom)
             selects.append(ts_select)
 
+        # Union the time series selects to get a panel
         panel_query = sa.union(*selects)\
                         .order_by('dataset_name')\
                         .order_by('time_bucket')
@@ -85,11 +84,19 @@ class MetaTable(Base):
 
         panel = []
         for dataset_name, ts in groupby(panel_vals, lambda row: row.dataset_name):
-            ts_dict = {'name': dataset_name,
+
+            # Silly-looking comprehension to force evaluation
+            rows = [row for row in ts]
+            # If no records were found, don't include this dataset
+            if all([row.count == 0 for row in rows]):
+                continue
+
+            ts_dict = {'dataset_name': dataset_name,
                        'items': []}
-            for row in ts:
+
+            for row in rows:
                 ts_dict['items'].append({
-                    'datetime': row.time_bucket,
+                    'datetime': row.time_bucket.date(),  # Return without tz info. Should be UTC.
                     'count':    row.count
                 })
             panel.append(ts_dict)
@@ -99,7 +106,10 @@ class MetaTable(Base):
     # Information about all point datasets
     @classmethod
     def index(cls):
-        pass
+        results = session.query(cls.dataset_name)\
+                        .filter(cls.approved_status == 'true')
+        names = [result.dataset_name for result in results]
+        return names
 
     @classmethod
     def get_by_dataset_name(cls, name):
@@ -108,18 +118,39 @@ class MetaTable(Base):
     # Return select statement to execute or union
     def timeseries(self, agg_unit, start, end, geom=None):
         t = self.point_table
-        sel = select([func.count(t.c.point_id).label('count'),  # Count unique records
-                      func.date_trunc(agg_unit, t.c.point_date).label('time_bucket'),
-                      text("'{}' AS dataset_name".format(self.dataset_name))])\
-            .where(and_(t.c.point_date > start,
-                        t.c.point_date < end))\
-            .group_by('time_bucket')  # aggregate by time unit
 
+        # Create a CTE to represent every time bucket in the timeseries
+        # with a default count of 0
+        day_generator = func.generate_series(func.date_trunc(agg_unit, start),
+                                             func.date_trunc(agg_unit, end),
+                                             '1 ' + agg_unit)
+        defaults = select([sa.literal_column("0").label('count'),
+                           day_generator.label('time_bucket')])\
+            .alias('defaults')
+
+        # Create a CTE that grabs the number of records contained in each time bucket.
+        # Will only have rows for buckets with records.
+        actuals = select([func.count(t.c.point_id).label('count'),  # Count unique records
+                          func.date_trunc(agg_unit, t.c.point_date).label('time_bucket')])\
+            .where(sa.and_(t.c.point_date >= start,            # Only include records in time window
+                           t.c.point_date <= end))\
+            .group_by('time_bucket')
+
+        # Also filter by geometry if requested
         if geom:
-            # Only include locations that fall in the query geom
-            sel = sel.where(func.ST_Within(t.c.geom, func.ST_GeomFromGeoJSON(geom)))
+            actuals = actuals.where(func.ST_Within(t.c.geom, func.ST_GeomFromGeoJSON(geom)))
 
-        return sel
+        # Need to alias to make it usable in a subexpression
+        actuals = actuals.alias('actuals')
+
+        # Outer join the default and observed values to create the timeseries select statement.
+        # If no observed value in a bucket, use the default.
+        ts = select([sa.literal_column("'{}'".format(self.dataset_name)).label('dataset_name'),
+                     defaults.c.time_bucket.label('time_bucket'),
+                     func.coalesce(actuals.c.count, defaults.c.count).label('count')]).\
+            select_from(defaults.outerjoin(actuals, actuals.c.time_bucket == defaults.c.time_bucket))
+
+        return ts
 
 
 class MasterTable(Base):

@@ -39,7 +39,8 @@ class TimeseriesRegressionTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        tables_to_drop = [
+        # Commented out to keep test DB the same while I run tests after running migrations
+        '''tables_to_drop = [
             'dat_flu_shot_clinics',
             'dat_landmarks',
             'dat_master',
@@ -57,7 +58,7 @@ class TimeseriesRegressionTests(unittest.TestCase):
             create_dummy_census_table()
 
         ingest_online_from_fixture(flu_shot_meta)
-        ingest_online_from_fixture(landmarks_meta)
+        ingest_online_from_fixture(landmarks_meta)'''
 
         cls.app = create_app().test_client()
 
@@ -110,8 +111,9 @@ class TimeseriesRegressionTests(unittest.TestCase):
             timeseries = [year['count'] for year in obj['items']]
             name_to_series[obj['dataset_name']] = timeseries
 
-        # No flu shot clinics in 2012, 65 in 2013.
-        self.assertEqual(name_to_series['flu_shot_clinics'], [0, 65])
         # 7 landmarks declared in 2012, 0 in 2013.
         self.assertEqual(name_to_series['landmarks'], [7, 0])
+        # No flu shot clinics in 2012, 65 in 2013.
+        self.assertEqual(name_to_series['flu_shot_clinics'], [0, 65])
+
 

@@ -469,152 +469,107 @@ def weather(table):
 @cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
 @crossdomain(origin="*")
 def dataset():
+    resp = {
+        'meta': {
+            'status': '',
+            'message': '',
+        },
+        'objects': [],
+    }
+
     raw_query_params = request.args.copy()
 
-    # set default value for temporal aggregation
-    agg = raw_query_params.get('agg')
-    if not agg:
-        agg = 'day'
-    else:
-        del raw_query_params['agg']
-
-    # if no obs_date given, default to >= 90 days ago
-    if not raw_query_params.get('obs_date__ge'):
-        six_months_ago = datetime.now() - timedelta(days=90)
-        raw_query_params['obs_date__ge'] = six_months_ago.strftime('%Y-%m-%d')
-
-    if not raw_query_params.get('obs_date__le'):
-        raw_query_params['obs_date__le'] = datetime.now().strftime('%Y-%m-%d') 
-
-    # set datatype
-    datatype = 'json'
-    if raw_query_params.get('data_type'):
-        datatype = raw_query_params['data_type']
-        del raw_query_params['data_type']
-
-    if not raw_query_params.get('dataset_name__in'):
-
-        q = '''
-            SELECT m.dataset_name
-            FROM meta_master AS m 
-            WHERE m.approved_status = 'true'
-        '''
-        with engine.begin() as c:
-            dataset_names = [d[0] for d in c.execute(q)]
-        
-        raw_query_params['dataset_name__in'] = ','.join(dataset_names)
-
-    mt = MasterTable.__table__
-    valid_query, query_clauses, resp, status_code = make_query(mt,raw_query_params)
-    
-    # check for valid output format
-    if datatype not in VALID_DATA_TYPE:
-        valid_query = False
-        resp['meta']['status'] = 'error'
-        resp['meta']['message'] = "'%s' is an invalid output format" % datatype
-        resp = make_response(json.dumps(resp, default=dthandler), 400)
-        resp.headers['Content-Type'] = 'application/json'
-
+    # If not set, let agg = day
+    agg = raw_query_params.pop('agg', 'day')
     # check for valid temporal aggregate
     if agg not in VALID_AGG:
-        valid_query = False
         resp['meta']['status'] = 'error'
         resp['meta']['message'] = "'%s' is an invalid temporal aggregation" % agg
         resp = make_response(json.dumps(resp, default=dthandler), 400)
         resp.headers['Content-Type'] = 'application/json'
+        return resp
 
-    if valid_query:
-        time_agg = func.date_trunc(agg, mt.c['obs_date'])
-        base_query = session.query(time_agg, 
-            func.count(mt.c['obs_date']),
-            mt.c['dataset_name'])
-        base_query = base_query.filter(mt.c['current_flag'] == True)
-        for clause in query_clauses:
-            base_query = base_query.filter(clause)
-        base_query = base_query.group_by(mt.c['dataset_name'])\
-            .group_by(time_agg)\
-            .order_by(time_agg)
-        values = [o for o in base_query.all()]
+    # If not set, let output format be json
+    datatype = raw_query_params.pop('data_type', 'json')
+    # check for valid output format
+    if datatype not in VALID_DATA_TYPE:
+        resp['meta']['status'] = 'error'
+        resp['meta']['message'] = "'%s' is an invalid output format" % datatype
+        resp = make_response(json.dumps(resp, default=dthandler), 400)
+        resp.headers['Content-Type'] = 'application/json'
+        return resp
 
-        # init from and to dates with python datetimes
-        from_date = truncate(parse(raw_query_params['obs_date__ge']), agg)
-        if 'obs_date__le' in raw_query_params.keys():
-            to_date = parse(raw_query_params['obs_date__le'])
-        else:
-            to_date = datetime.now()
+    # if no obs_date given, default from 90 days ago...
+    try:
+        start_date = parse(raw_query_params['obs_date__ge'])
+    except KeyError:
+        start_date = datetime.now() - timedelta(days=90)
+    # ... to today
+    try:
+        end_date = parse(raw_query_params['obs_date__le'])
+    except KeyError:
+        end_date = datetime.now()
 
-        # build the response
-        results = sorted(values, key=itemgetter(2))
-        for k,g in groupby(results, key=itemgetter(2)):
-            d = {'dataset_name': k}
+    # If dataset names not specifed, look at all point datasets
+    try:
+        table_names = raw_query_params['dataset_name__in'].split(',')
+    except KeyError:
+        table_names = MetaTable.index()
 
-            items = []
-            dense_matrix = []
-            cursor = from_date
-            v_index = 0
-            dataset_values = list(g)
-            while cursor <= to_date:
-                if v_index < len(dataset_values) and \
-                    dataset_values[v_index][0].replace(tzinfo=None) == cursor:
-                    dense_matrix.append((cursor, dataset_values[v_index][1]))
-                    v_index += 1
-                else:
-                    dense_matrix.append((cursor, 0))
+    # If no geom given, don't filter by geography
+    try:
+        geojson_doc = raw_query_params['location_geom__within']
+        geom = extract_first_geometry_fragment(geojson_doc)
+    except KeyError:
+        geom = None
 
-                cursor = increment_datetime_aggregate(cursor, agg)
+    panel = MetaTable.timeseries_all(table_names=table_names,
+                                     agg_unit=agg,
+                                     start=start_date,
+                                     end=end_date,
+                                     geom=geom)
 
-            dense_matrix = OrderedDict(dense_matrix)
-            for k in dense_matrix:
-                i = {
-                    'datetime': k,
-                    'count': dense_matrix[k],
-                    }
-                items.append(i)
+    resp['objects'] = panel
+    resp['meta']['query'] = raw_query_params
+    if geom:
+        resp['meta']['query']['location_geom__within'] = geom
+    resp['meta']['query']['agg'] = agg
+    resp['meta']['status'] = 'ok'
 
-            d['items'] = items
-            resp['objects'].append(d)
+    if datatype == 'json':
+        resp = make_response(json.dumps(resp, default=dthandler), 200)
+        resp.headers['Content-Type'] = 'application/json'
+    elif datatype == 'csv':
 
-        resp['meta']['query'] = raw_query_params
-        loc = resp['meta']['query'].get('location_geom__within')
-        if loc:
-            resp['meta']['query']['location_geom__within'] = json.loads(loc)
-        resp['meta']['query']['agg'] = agg
-        resp['meta']['status'] = 'ok'
-    
-        if datatype == 'json':
-            resp = make_response(json.dumps(resp, default=dthandler), status_code)
-            resp.headers['Content-Type'] = 'application/json'
-        elif datatype == 'csv':
- 
-            # response format
-            # temporal_group,dataset_name_1,dataset_name_2
-            # 2014-02-24 00:00:00,235,653
-            # 2014-03-03 00:00:00,156,624
- 
-            fields = ['temporal_group']
-            for o in resp['objects']:
-                fields.append(o['dataset_name'])
- 
-            csv_resp = []
-            i = 0
-            for k,g in groupby(resp['objects'], key=itemgetter('dataset_name')):
-                l_g = list(g)[0]
-                
-                j = 0
-                for row in l_g['items']:
-                    # first iteration, populate the first column with temporal_groups
-                    if i == 0: 
-                        csv_resp.append([row['datetime']])
-                    csv_resp[j].append(row['count'])
-                    j += 1
-                i += 1
-                    
-            csv_resp.insert(0, fields)
-            csv_resp = make_csv(csv_resp)
-            resp = make_response(csv_resp, 200)
-            resp.headers['Content-Type'] = 'text/csv'
-            filedate = datetime.now().strftime('%Y-%m-%d')
-            resp.headers['Content-Disposition'] = 'attachment; filename=%s.csv' % (filedate)
+        # response format
+        # temporal_group,dataset_name_1,dataset_name_2
+        # 2014-02-24 00:00:00,235,653
+        # 2014-03-03 00:00:00,156,624
+
+        fields = ['temporal_group']
+        for o in resp['objects']:
+            fields.append(o['dataset_name'])
+
+        csv_resp = []
+        i = 0
+        for k,g in groupby(resp['objects'], key=itemgetter('dataset_name')):
+            l_g = list(g)[0]
+
+            j = 0
+            for row in l_g['items']:
+                # first iteration, populate the first column with temporal_groups
+                if i == 0:
+                    csv_resp.append([row['datetime']])
+                csv_resp[j].append(row['count'])
+                j += 1
+            i += 1
+
+        csv_resp.insert(0, fields)
+        csv_resp = make_csv(csv_resp)
+        resp = make_response(csv_resp, 200)
+        resp.headers['Content-Type'] = 'text/csv'
+        filedate = datetime.now().strftime('%Y-%m-%d')
+        resp.headers['Content-Disposition'] = 'attachment; filename=%s.csv' % (filedate)
     return resp
 
 @api.route(API_VERSION + '/api/detail/')
