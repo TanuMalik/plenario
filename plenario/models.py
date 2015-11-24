@@ -138,7 +138,7 @@ class MetaTable(Base):
 
         # Also filter by geometry if requested
         if geom:
-            actuals = actuals.where(func.ST_Within(t.c.geom, func.ST_GeomFromGeoJSON(geom)))
+            actuals = actuals.where(t.c.geom.ST_Within(func.ST_GeomFromGeoJSON(geom)))
 
         # Need to alias to make it usable in a subexpression
         actuals = actuals.alias('actuals')

@@ -1,6 +1,6 @@
 from hashlib import md5
 
-flu_url = 'https://data.cityofchicago.org/api/views/g5vx-5vqf/rows.csv?accessType=DOWNLOAD'
+flu_url = 'https://data.cityofchicago.org/api/views/rfdj-hdmf/rows.csv?accessType=DOWNLOAD'
 flu_url_hash = md5(flu_url).hexdigest()
 
 flu_shot_meta = {
@@ -11,11 +11,11 @@ flu_shot_meta = {
     'source_url': flu_url,
     'source_url_hash': flu_url_hash,
     'update_freq': 'yearly',
-    'business_key': u'event',
+    'business_key': u'facility name',
     'observed_date': u'date',
     'latitude': u'latitude',
     'longitude': u'longitude',
-    'location': u'location',
+    'location': None,
     'contributor_name': u'Carlos',
     'contributor_organization': u'StrexCorp',
     'contributor_email': u'foo@bar.edu',

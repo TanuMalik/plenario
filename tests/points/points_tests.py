@@ -8,6 +8,8 @@ from sqlalchemy import Table, MetaData
 from sqlalchemy.exc import NoSuchTableError
 from plenario import create_app
 import json
+import os
+import urllib
 
 def ingest_online_from_fixture(fixture_meta):
         md = MetaTable(**fixture_meta)
@@ -115,5 +117,24 @@ class TimeseriesRegressionTests(unittest.TestCase):
         self.assertEqual(name_to_series['landmarks'], [7, 0])
         # No flu shot clinics in 2012, 65 in 2013.
         self.assertEqual(name_to_series['flu_shot_clinics'], [0, 65])
+
+    def test_geo_filter(self):
+        pwd = os.path.dirname(os.path.realpath(__file__))
+        rect_path = os.path.join(pwd, '../test_fixtures', 'loop_rectangle.json')
+        with open(rect_path, 'r') as rect_json:
+            query_rect = rect_json.read()
+        escaped_query_rect = urllib.quote(query_rect)
+
+        url = '/v1/api/timeseries/?obs_date__ge=2013-01-01&obs_date__le=2013-12-31&agg=year&location_geom__within=' + escaped_query_rect
+        resp = self.app.get(url)
+        resp_data = json.loads(resp.data)
+
+        self.assertEqual(len(resp_data['objects']), 1)
+        timeseries = resp_data['objects'][0]
+        self.assertEqual(timeseries['dataset_name'], 'flu_shot_clinics')
+
+        # Extract the number of flu clinics per time unit
+        counts = [time_unit['count'] for time_unit in timeseries['items']]
+        self.assertEqual([5], counts)
 
 

@@ -31,7 +31,7 @@ def upgrade():
     for name in dataset_names():
         pt = MetaTable.get_by_dataset_name(name).point_table
         sel = sa.select([mt.c.location_geom])\
-                .select_from(pt.join(mt, mt.c.master_row_id == pt.c.point_id))\
+                .where(mt.c.master_row_id == pt.c.point_id)\
                 .limit(1)
         upd = pt.update().values(geom=sel)
         app_engine.execute(upd)
