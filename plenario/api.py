@@ -504,24 +504,27 @@ def dataset():
         start_date = parse(raw_query_params['obs_date__ge'])
     except KeyError:
         start_date = datetime.now() - timedelta(days=90)
-    # ... to today
+    # ... to today.
     try:
         end_date = parse(raw_query_params['obs_date__le'])
     except KeyError:
         end_date = datetime.now()
 
-    # If dataset names not specifed, look at all point datasets
+    # If dataset names not specifed, look at all point datasets.
     try:
         table_names = raw_query_params['dataset_name__in'].split(',')
     except KeyError:
         table_names = MetaTable.index()
 
-    # If no geom given, don't filter by geography
+    # If no geom given, don't filter by geography.
     try:
         geojson_doc = raw_query_params['location_geom__within']
         geom = extract_first_geometry_fragment(geojson_doc)
     except KeyError:
         geom = None
+
+    # Only examine tables that have a chance of containing records within the date and space boundaries.
+    table_names = MetaTable.narrow_candidates(table_names, start_date, end_date, geom)
 
     panel = MetaTable.timeseries_all(table_names=table_names,
                                      agg_unit=agg,

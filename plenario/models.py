@@ -50,9 +50,6 @@ class MetaTable(Base):
     def __repr__(self):
         return '<MetaTable %r (%r)>' % (self.human_name, self.dataset_name)
 
-    #def __init__(self):
-    #    self.point_table = None
-
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
@@ -110,6 +107,22 @@ class MetaTable(Base):
                         .filter(cls.approved_status == 'true')
         names = [result.dataset_name for result in results]
         return names
+
+    @classmethod
+    def narrow_candidates(cls, dataset_names, start, end, geom=None):
+        """
+        :param dataset_names: Names of point datasets to be considered
+        :return names: Names of point datasets whose bounding box and date range interesects with the given bounds.
+        """
+        # Filter out datsets that don't intersect the time boundary
+        q = session.query(MetaTable.dataset_name)\
+            .filter(MetaTable.dataset_name.in_(dataset_names), MetaTable.obs_from < end, MetaTable.obs_to > start)
+
+        # or the geometry boundary
+        if geom:
+            q = q.filter(MetaTable.bbox.ST_Intersects(func.ST_GeomFromGeoJSON(geom)))
+
+        return [row.dataset_name for row in q.all()]
 
     @classmethod
     def get_by_dataset_name(cls, name):
