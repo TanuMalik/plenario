@@ -17,14 +17,10 @@ pwd = os.path.dirname(os.path.realpath(__file__))
 plenario_path = os.path.join(pwd, '../../..')
 sys.path.append(str(plenario_path))
 
-from plenario.database import session, app_engine
+from version_helpers import dataset_names
+from plenario.database import app_engine
 from plenario.models import MetaTable, MasterTable
 import sqlalchemy as sa
-
-
-def dataset_names():
-    return [row.dataset_name for row in session.query(MetaTable.dataset_name).all()]
-
 
 def upgrade():
     mt = MasterTable.__table__

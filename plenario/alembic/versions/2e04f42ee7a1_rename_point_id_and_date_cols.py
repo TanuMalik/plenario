@@ -25,7 +25,8 @@ from plenario.database import session
 
 def dataset_names_with_date_col_names():
     return [(row.dataset_name, row.observed_date)
-            for row in session.query(MetaTable.dataset_name, MetaTable.observed_date).all()]
+            for row in session.query(MetaTable.dataset_name, MetaTable.observed_date)
+            .filter_by(approved_status='true').all()]
 
 
 def upgrade():

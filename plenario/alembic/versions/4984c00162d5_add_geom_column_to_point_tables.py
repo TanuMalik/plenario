@@ -18,14 +18,9 @@ plenario_path = os.path.join(pwd, '../../..')
 sys.path.append(str(plenario_path))
 
 from alembic import op
-from plenario.database import session
-from plenario.models import MetaTable
+from version_helpers import dataset_names
 import sqlalchemy as sa
 from geoalchemy2 import Geometry
-
-
-def dataset_names():
-    return [row.dataset_name for row in session.query(MetaTable.dataset_name).all()]
 
 
 def upgrade():
