@@ -1,0 +1,42 @@
+"""Create indexes
+
+Revision ID: 479b90b2637d
+Revises: 42eee6f4f98c
+Create Date: 2015-11-30 08:58:15.522826
+
+"""
+
+# revision identifiers, used by Alembic.
+revision = '479b90b2637d'
+down_revision = '42eee6f4f98c'
+branch_labels = None
+depends_on = None
+
+import os, sys
+
+pwd = os.path.dirname(os.path.realpath(__file__))
+plenario_path = os.path.join(pwd, '../../..')
+sys.path.append(str(plenario_path))
+
+from plenario.database import session
+from plenario.models import MetaTable
+from alembic import op
+
+
+def dataset_names():
+    return [row.dataset_name for row in session.query(MetaTable.dataset_name).all()]
+
+
+def upgrade():
+    for name in dataset_names():
+        table_name = 'dat_{}'.format(name)
+        op.create_index('ix_{}_point_id'.format(name), table_name, ['point_id'])
+        op.create_index('ix_{}_point_date'.format(name), table_name, ['point_date'])
+        op.create_index('ix_{}_point_geom'.format(name), table_name, ['geom'])
+
+
+def downgrade():
+    for name in dataset_names():
+        op.drop_index('ix_{}_point_id'.format(name))
+        op.drop_index('ix_{}_point_date'.format(name))
+        op.drop_index('ix_{}_point_geom'.format(name))
