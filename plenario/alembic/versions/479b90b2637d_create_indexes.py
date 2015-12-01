@@ -22,14 +22,6 @@ sys.path.append(str(plenario_path))
 from plenario.alembic.version_helpers import dataset_names
 from alembic import op
 
-
-def truncated_names():
-    for name in dataset_names():
-        # Indexes can only be 63 chars long.
-        # So make the part of the index name determined by the dataset be max 45 chars
-        yield name[:45]
-
-
 def upgrade():
     for name in dataset_names():
         # Indexes can only be 63 chars long.
