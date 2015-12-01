@@ -23,16 +23,24 @@ from plenario.alembic.version_helpers import dataset_names
 from alembic import op
 
 
-def upgrade():
+def truncated_names():
     for name in dataset_names():
+        # Indexes can only be 63 chars long.
+        # So make the part of the index name determined by the dataset be max 45 chars
+        yield name[:45]
+
+
+def upgrade():
+    for name in truncated_names():
         table_name = 'dat_{}'.format(name)
+
         op.create_index('ix_{}_point_id'.format(name), table_name, ['point_id'])
         op.create_index('ix_{}_point_date'.format(name), table_name, ['point_date'])
         op.create_index('ix_{}_point_geom'.format(name), table_name, ['geom'])
 
 
 def downgrade():
-    for name in dataset_names():
+    for name in truncated_names():
         op.drop_index('ix_{}_point_id'.format(name))
         op.drop_index('ix_{}_point_date'.format(name))
         op.drop_index('ix_{}_point_geom'.format(name))
