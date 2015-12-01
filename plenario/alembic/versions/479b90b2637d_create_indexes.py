@@ -29,14 +29,12 @@ def upgrade():
         trunc = name[:45]
         table_name = 'dat_{}'.format(name)
 
-        op.create_index('ix_{}_point_id'.format(trunc), table_name, ['point_id'])
         op.create_index('ix_{}_point_date'.format(trunc), table_name, ['point_date'])
         op.create_index('ix_{}_point_geom'.format(trunc), table_name, ['geom'])
 
 
 def downgrade():
-    for name in truncated_names():
+    for name in dataset_names():
         trunc = name[:45]
-        op.drop_index('ix_{}_point_id'.format(trunc))
         op.drop_index('ix_{}_point_date'.format(trunc))
         op.drop_index('ix_{}_point_geom'.format(trunc))
