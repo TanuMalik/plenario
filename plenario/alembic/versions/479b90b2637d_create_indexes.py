@@ -20,7 +20,10 @@ plenario_path = os.path.join(pwd, '../../..')
 sys.path.append(str(plenario_path))
 
 from plenario.alembic.version_helpers import dataset_names
+from plenario.database import session
 from alembic import op
+import sqlalchemy as sa
+
 
 def upgrade():
     for name in dataset_names():
@@ -29,12 +32,30 @@ def upgrade():
         trunc = name[:45]
         table_name = 'dat_{}'.format(name)
 
-        op.create_index('ix_{}_point_date'.format(trunc), table_name, ['point_date'])
-        op.create_index('ix_{}_point_geom'.format(trunc), table_name, ['geom'])
+        # Could be DRYer
+        date_ix_name = 'ix_{}_point_date'.format(trunc)
+        if not exists(date_ix_name):
+            op.create_index('ix_{}_point_date'.format(trunc), table_name, ['point_date'])
+
+        geom_ix_name = 'ix_{}_point_geom'.format(trunc)
+        if not exists(geom_ix_name):
+            op.create_index('ix_{}_point_geom'.format(trunc), table_name, ['geom'])
+
+
+def exists(ix_name):
+    sel = sa.text("SELECT to_regclass('{}');".format(ix_name))
+    found = session.execute(sel).first()[0]
+    return bool(found)
 
 
 def downgrade():
     for name in dataset_names():
         trunc = name[:45]
-        op.drop_index('ix_{}_point_date'.format(trunc))
-        op.drop_index('ix_{}_point_geom'.format(trunc))
+
+        date_ix_name = 'ix_{}_point_date'.format(trunc)
+        if exists(date_ix_name):
+            op.drop_index(date_ix_name)
+
+        geom_ix_name = 'ix_{}_point_geom'.format(trunc)
+        if exists(geom_ix_name):
+            op.drop_index(geom_ix_name)
