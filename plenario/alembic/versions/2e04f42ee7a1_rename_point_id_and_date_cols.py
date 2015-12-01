@@ -40,7 +40,7 @@ def upgrade():
         )
         op.alter_column(
             table_name,
-            date_col,
+            unicode.lower(date_col),
             new_column_name='point_date'
         )
 
@@ -57,5 +57,5 @@ def downgrade():
         op.alter_column(
             table_name,
             'point_date',
-            new_column_name=date_col
+            new_column_name=unicode.lower(date_col)
         )
