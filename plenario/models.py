@@ -82,7 +82,8 @@ class MetaTable(Base):
         panel = []
         for dataset_name, ts in groupby(panel_vals, lambda row: row.dataset_name):
 
-            # Silly-looking comprehension to force evaluation
+            # Looks silly, but ts gets closed after it's been iterated over once,
+            # so we need to store all the rows somewhere if we want to iterate over them twice.
             rows = [row for row in ts]
             # If no records were found, don't include this dataset
             if all([row.count == 0 for row in rows]):

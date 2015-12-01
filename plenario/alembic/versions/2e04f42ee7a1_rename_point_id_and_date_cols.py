@@ -21,6 +21,7 @@ sys.path.append(str(plenario_path))
 from alembic import op
 from plenario.models import MetaTable
 from plenario.database import session
+import sqlalchemy as sa
 
 
 def dataset_names_with_date_col_names():
@@ -30,14 +31,30 @@ def dataset_names_with_date_col_names():
 
 
 def upgrade():
-    # Make foo_row_id -> point_id for all point datasets foo
+    # Find oddballs that are doubly approved
+    sel = sa.select([MetaTable.dataset_name])\
+        .where(MetaTable.approved_status == 'true')\
+        .group_by(MetaTable.dataset_name)\
+        .having(sa.func.count(MetaTable.dataset_name) == 1)
+    bad_names = [row.dataset_name for row in session.execute(sel)]
+
+    # For now, (while I'm just testing the changes out)
+    # Only remove the records from MetaMaster.
+    # Leave the source tables intact.
+    delete = sa.delete(MetaTable)\
+        .where(MetaTable.dataset_name.in_(bad_names))
+    session.execute(delete)
+
     for dataset_name, date_col in dataset_names_with_date_col_names():
         table_name = 'dat_' + dataset_name
+
+        # Make foo_row_id -> point_id for all point datasets foo
         op.alter_column(
             table_name,
             '{}_row_id'.format(dataset_name),
             new_column_name='point_id'
         )
+        # Make foo's date col -> point_date
         op.alter_column(
             table_name,
             unicode.lower(date_col),
