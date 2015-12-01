@@ -32,14 +32,12 @@ def upgrade():
         trunc = name[:45]
         table_name = 'dat_{}'.format(name)
 
-        # Could be DRYer
-        date_ix_name = 'ix_{}_point_date'.format(trunc)
-        if not exists(date_ix_name):
-            op.create_index('ix_{}_point_date'.format(trunc), table_name, ['point_date'])
+        def create_if_not_exist(ix_name, col):
+            if not exists(ix_name):
+                op.create_index(ix_name, table_name, [col])
 
-        geom_ix_name = 'ix_{}_point_geom'.format(trunc)
-        if not exists(geom_ix_name):
-            op.create_index('ix_{}_point_geom'.format(trunc), table_name, ['geom'])
+        create_if_not_exist('ix_{}_point_date'.format(trunc), 'point_date')
+        create_if_not_exist('ix_{}_point_geom'.format(trunc), 'geom')
 
 
 def exists(ix_name):
@@ -52,10 +50,9 @@ def downgrade():
     for name in dataset_names():
         trunc = name[:45]
 
-        date_ix_name = 'ix_{}_point_date'.format(trunc)
-        if exists(date_ix_name):
-            op.drop_index(date_ix_name)
+        def drop_if_exist(ix_name):
+            if exists(ix_name):
+                op.drop_index(ix_name)
 
-        geom_ix_name = 'ix_{}_point_geom'.format(trunc)
-        if exists(geom_ix_name):
-            op.drop_index(geom_ix_name)
+        drop_if_exist('ix_{}_point_date'.format(trunc))
+        drop_if_exist('ix_{}_point_geom'.format(trunc))
