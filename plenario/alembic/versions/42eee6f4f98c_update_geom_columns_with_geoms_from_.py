@@ -12,12 +12,14 @@ down_revision = '4984c00162d5'
 branch_labels = None
 depends_on = None
 
-import os, sys
+import os
+import sys
+
 pwd = os.path.dirname(os.path.realpath(__file__))
 plenario_path = os.path.join(pwd, '../../..')
 sys.path.append(str(plenario_path))
 
-from version_helpers import dataset_names
+from plenario.alembic.version_helpers import dataset_names
 from plenario.database import app_engine
 from plenario.models import MetaTable, MasterTable
 import sqlalchemy as sa

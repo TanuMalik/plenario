@@ -12,13 +12,14 @@ down_revision = '42eee6f4f98c'
 branch_labels = None
 depends_on = None
 
-import os, sys
+import os
+import sys
 
 pwd = os.path.dirname(os.path.realpath(__file__))
 plenario_path = os.path.join(pwd, '../../..')
 sys.path.append(str(plenario_path))
 
-from version_helpers import dataset_names
+from plenario.alembic.version_helpers import dataset_names
 from alembic import op
 
 

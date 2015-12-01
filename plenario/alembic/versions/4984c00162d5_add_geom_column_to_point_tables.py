@@ -12,13 +12,15 @@ down_revision = '4e960796230e'
 branch_labels = None
 depends_on = None
 
-import os, sys
+import os
+import sys
+
 pwd = os.path.dirname(os.path.realpath(__file__))
 plenario_path = os.path.join(pwd, '../../..')
 sys.path.append(str(plenario_path))
 
 from alembic import op
-from version_helpers import dataset_names
+from plenario.alembic.version_helpers import dataset_names
 import sqlalchemy as sa
 from geoalchemy2 import Geometry
 
