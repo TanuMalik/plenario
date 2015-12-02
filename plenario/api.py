@@ -24,7 +24,6 @@ from plenario.models import MasterTable, MetaTable, ShapeMetadata
 from plenario.database import session, app_engine as engine, Base
 from plenario.utils.helpers import slugify, increment_datetime_aggregate
 from plenario.settings import CACHE_CONFIG, DATA_DIR
-import plenario.settings
 from plenario.utils.ogr2ogr import OgrExport, OgrError
 
 cache = Cache(config=CACHE_CONFIG)
@@ -465,7 +464,7 @@ def weather(table):
     return resp
 
 
-@api.route(API_VERSION + '/api/timeseries/')
+'''@api.route(API_VERSION + '/api/timeseries/')
 @cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
 @crossdomain(origin="*")
 def dataset():
@@ -573,7 +572,7 @@ def dataset():
         resp.headers['Content-Type'] = 'text/csv'
         filedate = datetime.now().strftime('%Y-%m-%d')
         resp.headers['Content-Disposition'] = 'attachment; filename=%s.csv' % (filedate)
-    return resp
+    return resp'''
 
 @api.route(API_VERSION + '/api/detail/')
 @cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
