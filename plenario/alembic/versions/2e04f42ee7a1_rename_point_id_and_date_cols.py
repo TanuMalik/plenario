@@ -35,7 +35,7 @@ def upgrade():
     sel = sa.select([MetaTable.dataset_name])\
         .where(MetaTable.approved_status == 'true')\
         .group_by(MetaTable.dataset_name)\
-        .having(sa.func.count(MetaTable.dataset_name) == 1)
+        .having(sa.func.count(MetaTable.dataset_name) > 1)
     bad_names = [row.dataset_name for row in session.execute(sel)]
 
     # For now, (while I'm just testing the changes out)
@@ -44,6 +44,8 @@ def upgrade():
     delete = sa.delete(MetaTable)\
         .where(MetaTable.dataset_name.in_(bad_names))
     session.execute(delete)
+
+    #print session.query(MetaTable).first()
 
     for dataset_name, date_col in dataset_names_with_date_col_names():
         table_name = 'dat_' + dataset_name
