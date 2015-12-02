@@ -20,8 +20,7 @@ plenario_path = os.path.join(pwd, '../../..')
 sys.path.append(str(plenario_path))
 
 from plenario.alembic.version_helpers import dataset_names
-from plenario.database import session
-from alembic import op
+from alembic import op, context
 import sqlalchemy as sa
 
 
@@ -41,8 +40,9 @@ def upgrade():
 
 
 def exists(ix_name):
+    conn = context.get_context().connection
     sel = sa.text("SELECT to_regclass('{}');".format(ix_name))
-    found = session.execute(sel).first()[0]
+    found = conn.execute(sel).first()[0]
     return bool(found)
 
 
