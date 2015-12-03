@@ -11,6 +11,7 @@ import json
 import os
 import urllib
 
+
 def ingest_online_from_fixture(fixture_meta):
         md = MetaTable(**fixture_meta)
         session.add(md)

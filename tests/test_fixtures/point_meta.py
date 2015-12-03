@@ -20,7 +20,7 @@ flu_shot_meta = {
     'contributor_organization': u'StrexCorp',
     'contributor_email': u'foo@bar.edu',
     'contributed_data_types': None,
-    'approved_status': True,
+    'approved_status': 'true',
     'is_socrata_source': False
 }
 
@@ -44,6 +44,6 @@ landmarks_meta = {
     'contributor_organization': u'StrexCorp',
     'contributor_email': u'foo@bar.edu',
     'contributed_data_types': None,
-    'approved_status': True,
+    'approved_status': 'true',
     'is_socrata_source': False
 }
