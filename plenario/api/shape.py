@@ -50,7 +50,7 @@ def find_intersecting_shapes(geojson):
     Also include how many geom rows of the dataset intersect.
     :param geojson: URL encoded geojson.
     """
-    fragment = extract_first_geometry_fragment(geojson)
+    fragment = json.dumps(extract_first_geometry_fragment(geojson))
 
     try:
         # First, do a bounding box check on all shape datasets.

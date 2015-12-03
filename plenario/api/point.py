@@ -1,14 +1,13 @@
 from plenario.api.common import cache, crossdomain, CACHE_TIMEOUT, make_cache_key, \
-    dthandler, make_csv, extract_first_geometry_fragment
+    dthandler, make_csv, extract_first_geometry_fragment, make_fragment_str
 from flask import request, make_response
-from dateutil.parser import parse
+import dateutil.parser
 from datetime import timedelta, datetime
 from plenario.models import MetaTable
 from itertools import groupby
 from operator import itemgetter
 import json
 from sqlalchemy import Table
-#from collections import defaultdict
 from sqlalchemy.exc import NoSuchTableError
 from plenario.database import session, Base, app_engine as engine
 
@@ -43,18 +42,18 @@ class ParamValidator(object):
 
     def validate(self, params):
         for k, v in params.items():
-            # Is k a param name with a defined transformation?
             if k in self.transforms.keys():
+                # k is a param name with a defined transformation
                 val, err = self.transforms[k](v)
-                # Was v a valid string for this param name?
                 if err:
+                    # v wasn't a valid string for this param name
                     return err
                 # Override the default with the transformed value.
                 self.vals[k] = val
                 continue
 
-            # Is k specifying a filter on a dataset?
             elif self.cols:
+                # Maybe k specifies a filter on a dataset
                 filter = self._make_filter(k, v)
                 if filter:
                     self.filters.append(filter)
@@ -64,6 +63,17 @@ class ParamValidator(object):
             # nor a valid filter.
             warning = 'Unused parameter value "{}={}"'.format(k, v)
             self.warnings.append(warning)
+
+        self._eval_defaults()
+
+    def _eval_defaults(self):
+        """
+        Replace every value in vals that is callable with the returned value of that callable.
+        Lets us lazily evaluate dafaults only when they aren't overridden.
+        """
+        for k, v in self.vals.items():
+            if hasattr(v, '__call__'):
+                self.vals[k] = v()
 
     def _make_filter(self, k, v):
         return None
@@ -78,6 +88,23 @@ def agg_validator(agg_str):
         return None, error_msg
 
 
+def date_validator(date_str):
+    try:
+        date = dateutil.parser.parse(date_str)
+        return date, None
+    except (ValueError, OverflowError):
+        error_msg = 'Could not parse date string {}'.format(date_str)
+        return None, error_msg
+
+
+def list_of_datasets_validator(list_str):
+    table_names = list_str.split(',')
+    if not len(table_names) > 1:
+        error_msg = "Expected comma-separated list of computer-formatted dataset names. Couldn't parse {}".format(list_str)
+        return None, error_msg
+    return table_names, None
+
+
 def make_format_validator(valid_formats):
     """
     :param valid_formats: A list of strings that are acceptable types of data formats.
@@ -88,11 +115,32 @@ def make_format_validator(valid_formats):
         if format_str in valid_formats:
             return format_str, None
         else:
-            error_msg = '{} is not a valid output format. Plenario avvepts {}'\
+            error_msg = '{} is not a valid output format. Plenario accepts {}'\
                         .format(format_str, ','.join(valid_formats))
             return error_msg, None
 
     return format_validator
+
+
+def geom_validator(geojson_str):
+    # Only extracts first geometry fragment as dict.
+    try:
+        fragment = extract_first_geometry_fragment(geojson_str)
+        return fragment, None
+    except ValueError:
+        error_message = "Could not parse as geojson: {}".format(geojson_str)
+        return None, error_message
+
+
+def int_validator(int_str):
+    try:
+        num = int(int_str)
+        assert(num > 0)
+        return num, None
+    except (ValueError, AssertionError):
+        error_message = "Could not parse as positive integer: {}".format(int_str)
+        return None, error_message
+
 
 @cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
 @crossdomain(origin="*")
@@ -105,60 +153,37 @@ def timeseries():
         'objects': [],
     }
 
-    raw_query_params = request.args.copy()
+    validator = ParamValidator()\
+        .set_optional('agg', agg_validator, 'day')\
+        .set_optional('data_type', make_format_validator(['json', 'csv']), 'json')\
+        .set_optional('dataset_name__in', list_of_datasets_validator, lambda: MetaTable.index())\
+        .set_optional('obs_date__ge', date_validator, datetime.now() - timedelta(days=90))\
+        .set_optional('obs_date__le', date_validator, datetime.now())\
+        .set_optional('location_geom__within', geom_validator, None)\
+        .set_optional('buffer', int_validator, 100)
 
-    validator = ParamValidator().set_optional('agg', agg_validator, 'week')\
-                                .set_optional('data_type', )
-
-    # If not set, let agg = day
-    agg = raw_query_params.pop('agg', 'day')
-    # check for valid temporal aggregate
-    if agg not in VALID_AGG:
+    err = validator.validate(request.args)
+    if err:
         resp['meta']['status'] = 'error'
-        resp['meta']['message'] = "'%s' is an invalid temporal aggregation" % agg
+        resp['meta']['message'] = err
         resp = make_response(json.dumps(resp, default=dthandler), 400)
         resp.headers['Content-Type'] = 'application/json'
         return resp
 
-    # If not set, let output format be json
-    datatype = raw_query_params.pop('data_type', 'json')
-    # check for valid output format
-    VALID_DATA_TYPE = ['csv', 'json']
-    if datatype not in VALID_DATA_TYPE:
-        resp['meta']['status'] = 'error'
-        resp['meta']['message'] = "'%s' is an invalid output format" % datatype
-        resp = make_response(json.dumps(resp, default=dthandler), 400)
-        resp.headers['Content-Type'] = 'application/json'
-        return resp
-
-    # if no obs_date given, default from 90 days ago...
-    try:
-        start_date = parse(raw_query_params['obs_date__ge'])
-    except KeyError:
-        start_date = datetime.now() - timedelta(days=90)
-    # ... to today.
-    try:
-        end_date = parse(raw_query_params['obs_date__le'])
-    except KeyError:
-        end_date = datetime.now()
-
-    # If dataset names not specifed, look at all point datasets.
-    try:
-        table_names = raw_query_params['dataset_name__in'].split(',')
-    except KeyError:
-        table_names = MetaTable.index()
-
-    # If no geom given, don't filter by geography.
-    try:
-        geojson_doc = raw_query_params['location_geom__within']
-        geom = extract_first_geometry_fragment(geojson_doc)
-    except KeyError:
+    # Geometry is an optional parameter.
+    # If it was provided, convert the polygon or linestring to a postgres-ready form.
+    geom_frag = validator.vals['location_geom__within']
+    if geom_frag:
+        buffer = validator.vals['buffer']
+        # Should probably catch a shape exception here
+        geom = make_fragment_str(geom_frag, buffer)
+    else:
         geom = None
 
-    '''
-    What do I extract from the query string?
-    agg, datatype, start_date, end_date, table_names, geojson_doc
-    '''
+    table_names = validator.vals['dataset_name__in']
+    start_date = validator.vals['obs_date__ge']
+    end_date = validator.vals['obs_date__le']
+    agg = validator.vals['agg']
 
     # Only examine tables that have a chance of containing records within the date and space boundaries.
     table_names = MetaTable.narrow_candidates(table_names, start_date, end_date, geom)
@@ -170,12 +195,14 @@ def timeseries():
                                      geom=geom)
 
     resp['objects'] = panel
-    resp['meta']['query'] = raw_query_params
+    # We're gonna mutate the query, so we have to make a copy
+    resp['meta']['query'] = request.args.copy()
     if geom:
         resp['meta']['query']['location_geom__within'] = geom
     resp['meta']['query']['agg'] = agg
     resp['meta']['status'] = 'ok'
 
+    datatype = validator.vals['data_type']
     if datatype == 'json':
         resp = make_response(json.dumps(resp, default=dthandler), 200)
         resp.headers['Content-Type'] = 'application/json'
@@ -469,60 +496,3 @@ def make_query(table, raw_query_params):
 
     #print "make_query(): query_clauses=", query_clauses
     return valid_query, query_clauses, resp, status_code
-
-"""
-I need a sane way to declare what arguments are required, set defaults, etc.
-
-What kind of params are there?
-
-Enum-like: agg, datatype are strings that must be contained in a predefined list
-Time: dates
-Geom: a geojson string
-string: dataset_name
-kwarg: dataset_field = name
-int: resolution, buffer,
-
-
-"""
-
-'''
-Usecase: /timeseries
-What do I extract from the query string?
-agg, datatype, start_date, end_date, table_names, geojson_doc
-
-ParamParser().set_optional('dataset_names__in', None)
-             .set_optional('obs_date__ge', date_param, 90_ago)
-             .set_optional('obs_date__le', date_param, today)
-             .set_optional('agg', agg_enum, 'day')
-             .set_optional('location_geom__within', geojson_param, None)
-
-Usecase: /detail
-
-ParamParser().set_optional('')
-
-'''
-
-
-class Enum(object):
-
-    def __init__(self, name, valid_vals):
-        self.name = name
-        self.valid_vals = valid_vals
-
-
-class Param(object):
-    def __init__(self, name, is_valid, transform=None):
-        self.name = name
-        self._is_valid = is_valid
-        self.transform = transform
-
-    def make(self, key, val):
-        if not self._is_valid(key, val):
-            return None
-
-        if self.transform:
-            val = self.transform(val)
-        return val
-
-
-

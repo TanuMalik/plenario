@@ -5,14 +5,21 @@ from datetime import timedelta, date
 from functools import update_wrapper
 from flask import make_response, request, current_app
 import csv
+from shapely.geometry import asShape
 from cStringIO import StringIO
+import math
 
 cache = Cache(config=CACHE_CONFIG)
 
 RESPONSE_LIMIT = 1000
 CACHE_TIMEOUT = 60*60*6
 
-dthandler = lambda obj: obj.isoformat() if isinstance(obj, date) else None
+
+def dthandler(obj):
+    if isinstance(obj, date):
+        return obj.isoformat()
+    else:
+        return None
 
 
 # http://flask.pocoo.org/snippets/56/
@@ -71,7 +78,18 @@ def make_csv(data):
     return outp.getvalue()
 
 
+def get_size_in_degrees(meters, latitude):
+    earth_circumference = 40041000.0 # meters, average circumference
+    degrees_per_meter = 360.0 / earth_circumference
 
+    degrees_at_equator = meters * degrees_per_meter
+
+    latitude_correction = 1.0 / math.cos(latitude * (math.pi / 180.0))
+
+    degrees_x = degrees_at_equator * latitude_correction
+    degrees_y = degrees_at_equator
+
+    return degrees_x, degrees_y
 
 
 def extract_first_geometry_fragment(geojson):
@@ -81,7 +99,7 @@ def extract_first_geometry_fragment(geojson):
     This is what PostGIS's ST_GeomFromGeoJSON expects.
     :param geojson: A full geojson document
     :type geojson: str
-    :return:
+    :return: dict representing geojson structure
     """
     geo = json.loads(geojson)
     if 'features' in geo.keys():
@@ -91,5 +109,15 @@ def extract_first_geometry_fragment(geojson):
     else:
         fragment = geo
 
-    fragment['crs'] = {"type": "name", "properties": {"name": "EPSG:4326"}}
-    return json.dumps(fragment)
+    return fragment
+
+
+def make_fragment_str(geojson_fragment, buffer):
+    if geojson_fragment['type'] == 'LineString':
+        shape = asShape(geojson_fragment)
+        lat = shape.centroid.y
+        x, y = getSizeInDegrees(buffer, lat)
+        geojson_fragment = shape.buffer(y).__geo_interface__
+
+    geojson_fragment['crs'] = {"type": "name", "properties": {"name": "EPSG:4326"}}
+    return json.dumps(geojson_fragment)
