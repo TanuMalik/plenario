@@ -38,6 +38,39 @@ def create_dummy_census_table():
     session.commit()
 
 
+class DetailTests(unittest.TestCase):
+
+    # Assume same setup as Timeseries
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app().test_client()
+
+    def test_time_filter(self):
+        query = '/v1/api/detail/?dataset_name=flu_shot_clinics&obs_date__ge=2013-09-22&obs_date__le=2013-10-1'
+        resp = self.app.get(query)
+        response_data = json.loads(resp.data)
+
+        self.assertEqual(response_data['meta']['total'], 5)
+
+    def test_space_filter(self):
+        pwd = os.path.dirname(os.path.realpath(__file__))
+        rect_path = os.path.join(pwd, '../test_fixtures', 'loop_rectangle.json')
+        with open(rect_path, 'r') as rect_json:
+            query_rect = rect_json.read()
+        escaped_query_rect = urllib.quote(query_rect)
+
+        url = '/v1/api/detail/?dataset_name=flu_shot_clinics&obs_date__ge=2013-01-01&obs_date__le=2013-12-31&location_geom__within=' + escaped_query_rect
+        resp = self.app.get(url)
+        response_data = json.loads(resp.data)
+        self.assertEqual(response_data['meta']['total'], 5)
+
+    # TODO: Verify CSV output
+    '''def test_csv(self):
+        query = '/v1/api/detail/?dataset_name=flu_shot_clinics&obs_date__ge=2013-09-22&obs_date__le=2013-10-1&data_type=csv'
+        resp = self.app.get(query)
+        print resp.data'''
+
+
 class TimeseriesRegressionTests(unittest.TestCase):
 
     @classmethod

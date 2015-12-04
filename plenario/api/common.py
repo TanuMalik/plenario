@@ -19,7 +19,7 @@ def dthandler(obj):
     if isinstance(obj, date):
         return obj.isoformat()
     else:
-        return None
+        raise ValueError
 
 
 # http://flask.pocoo.org/snippets/56/
@@ -112,11 +112,11 @@ def extract_first_geometry_fragment(geojson):
     return fragment
 
 
-def make_fragment_str(geojson_fragment, buffer):
+def make_fragment_str(geojson_fragment, buffer=100):
     if geojson_fragment['type'] == 'LineString':
         shape = asShape(geojson_fragment)
         lat = shape.centroid.y
-        x, y = getSizeInDegrees(buffer, lat)
+        x, y = get_size_in_degrees(buffer, lat)
         geojson_fragment = shape.buffer(y).__geo_interface__
 
     geojson_fragment['crs'] = {"type": "name", "properties": {"name": "EPSG:4326"}}

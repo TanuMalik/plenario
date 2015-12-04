@@ -1,5 +1,5 @@
 from plenario.api.common import cache, crossdomain, CACHE_TIMEOUT, make_cache_key, \
-    dthandler, make_csv, extract_first_geometry_fragment, make_fragment_str
+    dthandler, make_csv, extract_first_geometry_fragment, make_fragment_str, RESPONSE_LIMIT
 from flask import request, make_response
 import dateutil.parser
 from datetime import timedelta, datetime
@@ -8,8 +8,10 @@ from itertools import groupby
 from operator import itemgetter
 import json
 from sqlalchemy import Table
+import sqlalchemy as sa
 from sqlalchemy.exc import NoSuchTableError
 from plenario.database import session, Base, app_engine as engine
+import shapely.wkb
 
 VALID_AGG = ['day', 'week', 'month', 'quarter', 'year']
 
@@ -27,11 +29,11 @@ class ParamValidator(object):
 
         if dataset_name:
             # Throws NoSuchTableError. Should be caught by caller.
-            dataset = Table('dat_' + dataset_name, Base.metadata,
+            self.dataset = Table('dat_' + dataset_name, Base.metadata,
                             autoload_with=engine, extend_existing=True)
-            self.cols = dataset.columns.keys()
-            # SQLAlchemy 'where' clauses that can be added to a query
-            self.filters = []
+            self.cols = self.dataset.columns.keys()
+            # SQLAlchemy boolean expressions
+            self.conditions = []
 
     def set_optional(self, name, transform, default):
         self.vals[name] = default
@@ -53,14 +55,18 @@ class ParamValidator(object):
                 continue
 
             elif self.cols:
-                # Maybe k specifies a filter on a dataset
-                filter = self._make_filter(k, v)
-                if filter:
-                    self.filters.append(filter)
+                # Maybe k specifies a condition on the dataset
+                cond, err = self._make_condition(k, v)
+                if cond:
+                    self.conditions.append(cond)
                     continue
+                elif err:
+                    # Valid field was specified, but operator was malformed
+                    return err
+                # else k wasn't an attempt at setting a condition
 
             # This param is neither present in the optional params
-            # nor a valid filter.
+            # nor does it specify a field in this dataset.
             warning = 'Unused parameter value "{}={}"'.format(k, v)
             self.warnings.append(warning)
 
@@ -75,8 +81,50 @@ class ParamValidator(object):
             if hasattr(v, '__call__'):
                 self.vals[k] = v()
 
-    def _make_filter(self, k, v):
-        return None
+    # Map codes we accept in API docs to sqlalchemy function names
+    field_ops = {
+        'gt': '__gt__',
+        'ge': '__ge__',
+        'lt': '__lt__',
+        'le': '__le__',
+        'ne': '__ne__',
+        'like': 'like',
+        'ilike': 'ilike',
+    }
+
+    def _make_condition(self, k, v):
+        # Generally, we expect the form k = [field]__[op]
+        # Can also be just [field] in the case of simple equality
+        tokens = k.split('__')
+        field = tokens[0]
+        if field not in self.cols:
+            # Don't make a condition.
+            # But nothing went wrong, so error is None too.
+            return None, None
+
+        col = self.dataset.columns.get(field)
+
+        if len(tokens) == 1:
+            # One token? Then it's an equality operation of the form k=v
+            cond = col == v
+            return cond, None
+        elif len(tokens) == 2:
+            # Two tokens? Then it's of the form [field]__[op_code]=v
+            op_code = tokens[1]
+            if op_code == 'in':
+                # TODO: change documentation to reflect expected input format
+                cond = col.in_(v.split(','))
+            else:
+                try:
+                    op_func = ParamValidator.field_ops[op_code]
+                    cond = getattr(col, op_func)(v)
+                except AttributeError:
+                    error_msg = "Invalid dataset field operator: {} called in {}={}".format(op_code, k, v)
+                    return None, error_msg
+            return cond, None
+        else:
+            error_msg = "Too many arguments on dataset field {}={}\n Expected [field]__[operator]=value".format(k, v)
+            return None, error_msg
 
 
 def agg_validator(agg_str):
@@ -166,19 +214,18 @@ def timeseries():
     if err:
         resp['meta']['status'] = 'error'
         resp['meta']['message'] = err
+        resp['meta']['query'] = request.args
         resp = make_response(json.dumps(resp, default=dthandler), 400)
         resp.headers['Content-Type'] = 'application/json'
         return resp
 
     # Geometry is an optional parameter.
     # If it was provided, convert the polygon or linestring to a postgres-ready form.
-    geom_frag = validator.vals['location_geom__within']
-    if geom_frag:
+    geom = validator.vals.get('location_geom__within', None)
+    if geom:
         buffer = validator.vals['buffer']
         # Should probably catch a shape exception here
-        geom = make_fragment_str(geom_frag, buffer)
-    else:
-        geom = None
+        geom = make_fragment_str(geom, buffer)
 
     table_names = validator.vals['dataset_name__in']
     start_date = validator.vals['obs_date__ge']
@@ -243,137 +290,107 @@ def timeseries():
 @cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
 @crossdomain(origin="*")
 def detail():
+
+    resp = {
+        'meta': {
+            'status': '',
+            'message': '',
+        },
+        'objects': [],
+    }
+
+    def make_error(msg):
+        resp['meta']['status'] = 'error'
+        resp['meta']['message'] = msg
+        resp['meta']['query'] = request.args
+        return make_response(json.dumps(resp), 400)
+
     raw_query_params = request.args.copy()
-    # if no obs_date given, default to >= 30 days ago
-    obs_dates = [i for i in raw_query_params.keys() if i.startswith('obs_date')]
-    if not obs_dates:
-        six_months_ago = datetime.now() - timedelta(days=30)
-        raw_query_params['obs_date__ge'] = six_months_ago.strftime('%Y-%m-%d')
 
-    # include_weather = False
-    '''if raw_query_params.get('weather') is not None:
-        include_weather = raw_query_params['weather']
-        del raw_query_params['weather']'''
-    agg, datatype, queries = parse_join_query(raw_query_params)
-    offset = raw_query_params.get('offset')
-    mt = MasterTable.__table__
-    valid_query, base_clauses, resp, status_code = make_query(mt, queries['base'])
-    if not raw_query_params.get('dataset_name'):
-        valid_query = False
-        resp['meta'] = {
-            'status': 'error',
-            'message': "'dataset_name' is required"
-        }
-        resp['objects'] = []
-    if valid_query:
-        resp['meta']['status'] = 'ok'
-        dname = raw_query_params['dataset_name']
-        dataset = Table('dat_%s' % dname, Base.metadata,
-            autoload=True, autoload_with=engine,
-            extend_existing=True)
-        dataset_fields = dataset.columns.keys()
-        base_query = session.query(mt, dataset)
-        '''if include_weather:
-            date_col_name = 'date'
-            try:
-                date_col_name = slugify(session.query(MetaTable)\
-                    .filter(MetaTable.dataset_name == dname)\
-                    .first().observed_date)
-            except AttributeError:
-                pass
-            date_col_type = str(getattr(dataset.c, date_col_name).type).lower()
-            if 'timestamp' in date_col_type:
-                weather_tname = 'hourly'
-            else:
-                weather_tname = 'daily'
-            weather_table = Table('dat_weather_observations_%s' % weather_tname, Base.metadata,
-                autoload=True, autoload_with=engine, extend_existing=True)
-            weather_fields = weather_table.columns.keys()
-            base_query = session.query(mt, dataset, weather_table)'''
-        valid_query, detail_clauses, resp, status_code = make_query(dataset, queries['detail'])
-        if valid_query:
-            resp['meta']['status'] = 'ok'
-            pk = [p.name for p in dataset.primary_key][0]
-            base_query = base_query.join(dataset, mt.c.dataset_row_id == dataset.c[pk])
-            for clause in base_clauses:
-                base_query = base_query.filter(clause)
-            for clause in detail_clauses:
-                base_query = base_query.filter(clause)
+    # First, make sure name of dataset was provided...
+    try:
+        dataset_name = raw_query_params['dataset_name']
+    except KeyError:
+        return make_error("'dataset_name' is required")
 
-            # Ignoring weather for the moment
-            '''
-            if include_weather:
-                w_q = {}
-                if queries['weather']:
-                    for k,v in queries['weather'].items():
-                        try:
-                            fname, operator = k.split('__')
-                        except ValueError:
-                            operator = 'eq'
-                            pass
-                        t_fname = WEATHER_COL_LOOKUP[weather_tname].get(fname, fname)
-                        w_q['__'.join([t_fname, operator])] = v
-                valid_query, weather_clauses, resp, status_code = make_query(weather_table, w_q)
-                if valid_query:
-                    resp['meta']['status'] = 'ok'
-                    base_query = base_query.join(weather_table, mt.c.weather_observation_id == weather_table.c.id)
-                    for clause in weather_clauses:
-                        base_query = base_query.filter(clause)'''
-            if valid_query:
-                base_query = base_query.limit(RESPONSE_LIMIT)
-                if offset:
-                    base_query = base_query.offset(int(offset))
-                values = [r for r in base_query.all()]
-                for value in values:
-                    d = {f:getattr(value, f) for f in dataset_fields}
-                    if value.location_geom is not None:
-                        d['location_geom'] = loads(value.location_geom.desc, hex=True).__geo_interface__
-                    '''if include_weather:
-                        d = {
-                            'observation': {f:getattr(value, f) for f in dataset_fields},
-                            'weather': {f:getattr(value, f) for f in weather_fields},
-                        }'''
-                    resp['objects'].append(d)
-                resp['meta']['query'] = raw_query_params
-                loc = resp['meta']['query'].get('location_geom__within')
-                if loc:
-                    resp['meta']['query']['location_geom__within'] = json.loads(loc)
-                resp['meta']['total'] = len(resp['objects'])
+    # and that we have that dataset.
+    try:
+        validator = ParamValidator(dataset_name)
+    except NoSuchTableError:
+        return make_error("Cannot find dataset named {}".format(dataset_name))
+
+    validator\
+        .set_optional('obs_date__ge', date_validator, datetime.now() - timedelta(days=90))\
+        .set_optional('obs_date__le', date_validator, datetime.now())\
+        .set_optional('location_geom__within', geom_validator, None)\
+        .set_optional('offset', int_validator, 0)\
+        .set_optional('data_type', make_format_validator(['json', 'csv']), 'json')
+
+    # If any optional parameters are malformed, we're better off bailing and telling the user
+    # than using a default and confusing them.
+    err = validator.validate(raw_query_params)
+    if err:
+        return make_error(err)
+
+    # I feel dirty constructing a big SQL call in the API view
+    # But let's leave a more ambitious cleanup for another day.
+    dset = validator.dataset
+    q = session.query(dset)
+    if validator.conditions:
+        q = q.filter(*validator.conditions)
+
+    start_date = validator.vals['obs_date__ge']
+    end_date = validator.vals['obs_date__le']
+    q = q.filter(dset.c.point_date >= start_date)\
+         .filter(dset.c.point_date <= end_date)
+
+    # If user provided a geom,
+    geom = validator.vals.get('location_geom__within', None)
+    if geom:
+        # make it a str ready for postgres.
+        geom = make_fragment_str(geom)
+        # Assumption: geom column holds PostGIS points
+        q = q.filter(dset.c.geom.ST_Within(sa.func.ST_GeomFromGeoJSON(geom)))
+
+
+    # Page in RESPONSE_LIMIT chunks
+    offset = validator.vals['offset']
+    q = q.limit(RESPONSE_LIMIT)
+    if offset > 0:
+        q = q.offset(offset)
+
+    col_names = validator.cols
+
+    geom_idx = col_names.index('geom')
+    rows = []
+
+    for record in q.all():
+        row = list(record)
+        row[geom_idx] = shapely.wkb.loads(row[geom_idx].desc, hex=True).__geo_interface__
+        rows.append(row)
+
+    datatype = validator.vals['data_type']
+
+
+    # TODO update docs to reflect that geojson is unsupported.
     if datatype == 'json':
-        resp = make_response(json.dumps(resp, default=dthandler), status_code)
+        for row in rows:
+            fields = {col: val for col, val in zip(col_names, row)}
+            resp['objects'].append(fields)
+
+        resp['meta']['total'] = len(resp['objects'])
+        resp['meta']['query'] = validator.vals
+        resp = make_response(json.dumps(resp, default=dthandler), 200)
         resp.headers['Content-Type'] = 'application/json'
 
-    elif datatype == 'geojson': #and not include_weather:
-        geojson_resp = {
-          "type": "FeatureCollection",
-          "features": []
-        }
-
-        for o in resp['objects']:
-            if o.get('location_geom'):
-                g = {
-                  "type": "Feature",
-                  "geometry": o['location_geom'],
-                  "properties": {f:getattr(value, f) for f in o}
-                }
-                geojson_resp['features'].append(g)
-
-        resp = make_response(json.dumps(geojson_resp, default=dthandler), status_code)
-        resp.headers['Content-Type'] = 'application/json'
     elif datatype == 'csv':
-        csv_resp = [dataset_fields]
-        '''if include_weather:
-            csv_resp = [dataset_fields + weather_fields]'''
-        for value in values:
-            d = [getattr(value, f) for f in dataset_fields]
-            '''if include_weather:
-                d.extend([getattr(value, f) for f in weather_fields])'''
-            csv_resp.append(d)
+        csv_resp = [col_names] + rows
         resp = make_response(make_csv(csv_resp), 200)
         dname = raw_query_params['dataset_name']
         filedate = datetime.now().strftime('%Y-%m-%d')
         resp.headers['Content-Type'] = 'text/csv'
         resp.headers['Content-Disposition'] = 'attachment; filename=%s_%s.csv' % (dname, filedate)
+
     return resp
 
 
@@ -452,34 +469,10 @@ def make_query(table, raw_query_params):
         elif operator == 'in':
             query = column.in_(query_value.split(','))
             query_clauses.append(query)
-        elif operator == 'within':
-            geo = json.loads(query_value)
-            #print "make_query(): geo is", geo.items()
-            if 'features' in geo.keys():
-                val = geo['features'][0]['geometry']
-            elif 'geometry' in geo.keys():
-                val = geo['geometry']
-            else:
-                val = geo
-            if val['type'] == 'LineString':
-                shape = asShape(val)
-                lat = shape.centroid.y
-                # 100 meters by default
-                x, y = getSizeInDegrees(100, lat)
-                val = shape.buffer(y).__geo_interface__
-            val['crs'] = {"type":"name","properties":{"name":"EPSG:4326"}}
-            query = column.ST_Within(func.ST_GeomFromGeoJSON(json.dumps(val)))
-            #print "make_query: val=", val
-            #print "make_query(): query = ", query
-            query_clauses.append(query)
-        elif operator.startswith('time_of_day'):
-            if operator.endswith('ge'):
-                query = func.date_part('hour', column).__ge__(query_value)
-            elif operator.endswith('le'):
-                query = func.date_part('hour', column).__le__(query_value)
-            query_clauses.append(query)
+
         else:
             try:
+                # http://stackoverflow.com/questions/14845196/dynamically-constructing-filters-in-sqlalchemy
                 attr = filter(
                     lambda e: hasattr(column, e % operator),
                     ['%s', '%s_', '__%s__']
