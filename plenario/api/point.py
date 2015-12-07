@@ -1,5 +1,6 @@
 from plenario.api.common import cache, crossdomain, CACHE_TIMEOUT, make_cache_key, \
-    dthandler, make_csv, extract_first_geometry_fragment, make_fragment_str, RESPONSE_LIMIT
+    dthandler, make_csv, extract_first_geometry_fragment, make_fragment_str, RESPONSE_LIMIT, \
+    get_size_in_degrees
 from flask import request, make_response
 import dateutil.parser
 from datetime import timedelta, datetime
@@ -7,11 +8,12 @@ from plenario.models import MetaTable
 from itertools import groupby
 from operator import itemgetter
 import json
-from sqlalchemy import Table
+from sqlalchemy import Table, text
 import sqlalchemy as sa
 from sqlalchemy.exc import NoSuchTableError
 from plenario.database import session, Base, app_engine as engine
-import shapely.wkb
+import shapely.wkb, shapely.geometry
+from sqlalchemy.types import NullType
 
 VALID_AGG = ['day', 'week', 'month', 'quarter', 'year']
 
@@ -190,21 +192,26 @@ def int_validator(int_str):
         return None, error_message
 
 
-@cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
-@crossdomain(origin="*")
-def timeseries():
+def make_error(msg):
     resp = {
         'meta': {
-            'status': '',
-            'message': '',
+            'status': 'error',
+            'message': msg,
         },
         'objects': [],
     }
 
+    resp['meta']['query'] = request.args
+    return make_response(json.dumps(resp), 400)
+
+
+@cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
+@crossdomain(origin="*")
+def timeseries():
     validator = ParamValidator()\
         .set_optional('agg', agg_validator, 'day')\
         .set_optional('data_type', make_format_validator(['json', 'csv']), 'json')\
-        .set_optional('dataset_name__in', list_of_datasets_validator, lambda: MetaTable.index())\
+        .set_optional('dataset_name__in', list_of_datasets_validator, MetaTable.index)\
         .set_optional('obs_date__ge', date_validator, datetime.now() - timedelta(days=90))\
         .set_optional('obs_date__le', date_validator, datetime.now())\
         .set_optional('location_geom__within', geom_validator, None)\
@@ -212,12 +219,7 @@ def timeseries():
 
     err = validator.validate(request.args)
     if err:
-        resp['meta']['status'] = 'error'
-        resp['meta']['message'] = err
-        resp['meta']['query'] = request.args
-        resp = make_response(json.dumps(resp, default=dthandler), 400)
-        resp.headers['Content-Type'] = 'application/json'
-        return resp
+        return make_error(err)
 
     # Geometry is an optional parameter.
     # If it was provided, convert the polygon or linestring to a postgres-ready form.
@@ -241,13 +243,14 @@ def timeseries():
                                      end=end_date,
                                      geom=geom)
 
-    resp['objects'] = panel
-    # We're gonna mutate the query, so we have to make a copy
-    resp['meta']['query'] = request.args.copy()
-    if geom:
-        resp['meta']['query']['location_geom__within'] = geom
-    resp['meta']['query']['agg'] = agg
-    resp['meta']['status'] = 'ok'
+    resp = {
+        'meta': {
+            'status': 'ok',
+            'message': validator.warnings,
+            'query': validator.vals
+        },
+        'objects': panel,
+    }
 
     datatype = validator.vals['data_type']
     if datatype == 'json':
@@ -290,23 +293,8 @@ def timeseries():
 @cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
 @crossdomain(origin="*")
 def detail():
-
-    resp = {
-        'meta': {
-            'status': '',
-            'message': '',
-        },
-        'objects': [],
-    }
-
-    def make_error(msg):
-        resp['meta']['status'] = 'error'
-        resp['meta']['message'] = msg
-        resp['meta']['query'] = request.args
-        return make_response(json.dumps(resp), 400)
-
+    # Part 1: validate parameters
     raw_query_params = request.args.copy()
-
     # First, make sure name of dataset was provided...
     try:
         dataset_name = raw_query_params['dataset_name']
@@ -332,8 +320,8 @@ def detail():
     if err:
         return make_error(err)
 
-    # I feel dirty constructing a big SQL call in the API view
-    # But let's leave a more ambitious cleanup for another day.
+    # Part 2: Construct SQL query
+    # TODO: handle SQL Exceptions
     dset = validator.dataset
     q = session.query(dset)
     if validator.conditions:
@@ -352,28 +340,29 @@ def detail():
         # Assumption: geom column holds PostGIS points
         q = q.filter(dset.c.geom.ST_Within(sa.func.ST_GeomFromGeoJSON(geom)))
 
-
     # Page in RESPONSE_LIMIT chunks
     offset = validator.vals['offset']
     q = q.limit(RESPONSE_LIMIT)
     if offset > 0:
         q = q.offset(offset)
 
+    # Part 3: Make SQL query and dump output into list of rows
     col_names = validator.cols
-
     geom_idx = col_names.index('geom')
     rows = []
-
     for record in q.all():
         row = list(record)
         row[geom_idx] = shapely.wkb.loads(row[geom_idx].desc, hex=True).__geo_interface__
         rows.append(row)
 
-    datatype = validator.vals['data_type']
-
-
+    # Part 4: Format response
     # TODO update docs to reflect that geojson is unsupported.
+    datatype = validator.vals['data_type']
     if datatype == 'json':
+        resp = {
+            'meta': {},
+            'objects': [],
+        }
         for row in rows:
             fields = {col: val for col, val in zip(col_names, row)}
             resp['objects'].append(fields)
@@ -394,98 +383,147 @@ def detail():
     return resp
 
 
-def parse_join_query(params):
-    queries = {
-        'base':    {},
-        'detail':  {},
-        'weather': {},
-    }
-    agg = 'day'
-    datatype = 'json'
-    master_columns = [
-        'obs_date',
-        'location_geom',
-        'dataset_name',
-        'weather_observation_id',
-        'census_block',
-    ]
-    weather_columns = [
-        'temp_hi',
-        'temp_lo',
-        'temp_avg',
-        'precip_amount',
-    ]
-    for key, value in params.items():
-        if key.split('__')[0] in master_columns:
-            queries['base'][key] = value
-        elif key.split('__')[0] in weather_columns:
-            queries['weather'][key] = value
-        elif key == 'agg':
-            agg = value
-        elif key == 'data_type':
-            datatype = value.lower()
-        else:
-            queries['detail'][key] = value
-    return agg, datatype, queries
+@cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
+@crossdomain(origin="*")
+def grid():
+    print 'grid()'
+    raw_query_params = request.args.copy()
+
+    # First, make sure name of dataset was provided...
+    try:
+        dataset_name = raw_query_params['dataset_name']
+    except KeyError:
+        return make_error("'dataset_name' is required")
+
+    try:
+        validator = ParamValidator(dataset_name)
+    except NoSuchTableError:
+        return make_error("Could not find dataset named {}.".format(dataset_name))
+
+    # TODO: Update docs to reflect that center[] is not supported
+    validator.set_optional('buffer', int_validator, 100)\
+             .set_optional('resolution', int_validator, 500)\
+             .set_optional('location_geom__within', geom_validator, None)\
+             .set_optional('obs_date__ge', date_validator, datetime.now() - timedelta(days=90))\
+             .set_optional('obs_date__le', date_validator, datetime.now())\
+
+    err = validator.validate(raw_query_params)
+    if err:
+        return make_error(err)
+
+    # TODO: better error handling
+
+    geom = validator.vals['location_geom__within']
+    if geom:
+        buffer = validator.vals['buffer']
+        geom = make_fragment_str(geom, buffer)
+    resolution = validator.vals['resolution']
+
+    dataset = MetaTable.get_by_dataset_name(dataset_name)
+    start_date = validator.vals['obs_date__ge']
+    end_date = validator.vals['obs_date__le']
+    time_conds = [dataset.point_table.c.point_date >= start_date,
+                  dataset.point_table.c.point_date <= end_date]
+
+    grid_rows, size_x, size_y = dataset.make_grid(resolution, geom, validator.conditions + time_conds)
+    resp = {'type': 'FeatureCollection', 'features': []}
+    for value in grid_rows:
+        d = {
+            'type': 'Feature',
+            'properties': {
+                'count': value[0],
+            },
+        }
+        if value[1]:
+            pt = shapely.wkb.loads(value[1].decode('hex'))
+            south, west = (pt.x - (size_x / 2)), (pt.y - (size_y /2))
+            north, east = (pt.x + (size_x / 2)), (pt.y + (size_y / 2))
+            d['geometry'] = shapely.geometry.box(south, west, north, east).__geo_interface__
+
+        resp['features'].append(d)
+
+    resp = make_response(json.dumps(resp, default=dthandler), 200)
+    resp.headers['Content-Type'] = 'application/json'
+    return resp
 
 
-def make_query(table, raw_query_params):
-    table_keys = table.columns.keys()
-    args_keys = raw_query_params.keys()
-    resp = {
-        'meta': {
-            'status': 'error',
-            'message': '',
-        },
-        'objects': [],
-    }
+@crossdomain(origin="*")
+def meta():
     status_code = 200
-    query_clauses = []
-    valid_query = True
+    resp = {
+            'meta': {
+                'status': 'ok',
+                'message': '',
+            },
+            'objects': []
+        }
 
-    #print "make_query(): args_keys = ", args_keys
+    dataset_name = request.args.get('dataset_name')
 
-    if 'offset' in args_keys:
-        args_keys.remove('offset')
-    if 'limit' in args_keys:
-        args_keys.remove('limit')
-    if 'order_by' in args_keys:
-        args_keys.remove('order_by')
-    if 'weather' in args_keys:
-        args_keys.remove('weather')
-    for query_param in args_keys:
-        try:
-            field, operator = query_param.split('__')
-            #print "make_query(): field, operator =", field, operator
-        except ValueError:
-            field = query_param
-            operator = 'eq'
-        query_value = raw_query_params.get(query_param)
-        column = table.columns.get(field)
-        if field not in table_keys:
-            resp['meta']['message'] = '"%s" is not a valid fieldname' % field
-            status_code = 400
-            valid_query = False
-        elif operator == 'in':
-            query = column.in_(query_value.split(','))
-            query_clauses.append(query)
+    q = '''
+        SELECT  m.obs_from, m.location, m.latitude, m.last_update,
+                m.source_url_hash, m.attribution, m.description, m.source_url,
+                m.obs_to, m.date_added, m.business_key, m.result_ids,
+                m.longitude, m.observed_date, m.human_name, m.dataset_name,
+                m.update_freq, ST_AsGeoJSON(m.bbox) as bbox
+        FROM meta_master AS m
+        WHERE m.approved_status = 'true'
+    '''
 
-        else:
-            try:
-                # http://stackoverflow.com/questions/14845196/dynamically-constructing-filters-in-sqlalchemy
-                attr = filter(
-                    lambda e: hasattr(column, e % operator),
-                    ['%s', '%s_', '__%s__']
-                )[0] % operator
-            except IndexError:
-                resp['meta']['message'] = '"%s" is not a valid query operator' % operator
-                status_code = 400
-                valid_query = False
-                break
-            if query_value == 'null': # pragma: no cover
-                query_value = None
-            query = getattr(column, attr)(query_value)
-            query_clauses.append(query)
+    if dataset_name:
+        # We need to get the bbox separately so we can request it as json
+        q = text('{0} AND m.dataset_name=:dataset_name'.format(q))
 
-    #print "make_query(): query_clauses=", query_clauses
-    return valid_query, query_clauses, resp, status_code
+        with engine.begin() as c:
+            metas = list(c.execute(q, dataset_name=dataset_name))
+    else:
+        with engine.begin() as c:
+            metas = list(c.execute(q))
+
+    for m in metas:
+        keys = dict(zip(m.keys(), m.values()))
+        # If we have bounding box data, add it
+        if (m['bbox'] is not None):
+            keys['bbox'] = json.loads(m.bbox)
+        resp['objects'].append(keys)
+
+    resp['meta']['total'] = len(resp['objects'])
+    resp = make_response(json.dumps(resp, default=dthandler), status_code)
+    resp.headers['Content-Type'] = 'application/json'
+    return resp
+
+
+@cache.cached(timeout=CACHE_TIMEOUT)
+@crossdomain(origin="*")
+def dataset_fields(dataset_name):
+    try:
+        table = Table('dat_%s' % dataset_name, Base.metadata,
+            autoload=True, autoload_with=engine,
+            extend_existing=True)
+        data = {
+            'meta': {
+                'status': 'ok',
+                'message': '',
+                'query': { 'dataset_name': dataset_name }
+            },
+            'objects': []
+        }
+        status_code = 200
+        for col in table.columns:
+            if not isinstance(col.type, NullType):
+                d = {}
+                d['field_name'] = col.name
+                d['field_type'] = str(col.type)
+                data['objects'].append(d)
+    except NoSuchTableError:
+        data = {
+            'meta': {
+                'status': 'error',
+                'message': "'%s' is not a valid table name" % dataset_name
+            },
+            'objects': []
+        }
+        status_code = 400
+    resp = make_response(json.dumps(data), status_code)
+    resp.headers['Content-Type'] = 'application/json'
+    return resp

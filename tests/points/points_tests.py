@@ -37,6 +37,13 @@ def create_dummy_census_table():
     """)
     session.commit()
 
+def get_loop_rect():
+    pwd = os.path.dirname(os.path.realpath(__file__))
+    rect_path = os.path.join(pwd, '../test_fixtures', 'loop_rectangle.json')
+    with open(rect_path, 'r') as rect_json:
+        query_rect = rect_json.read()
+    escaped_query_rect = urllib.quote(query_rect)
+    return escaped_query_rect
 
 class DetailTests(unittest.TestCase):
 
@@ -53,11 +60,7 @@ class DetailTests(unittest.TestCase):
         self.assertEqual(response_data['meta']['total'], 5)
 
     def test_space_filter(self):
-        pwd = os.path.dirname(os.path.realpath(__file__))
-        rect_path = os.path.join(pwd, '../test_fixtures', 'loop_rectangle.json')
-        with open(rect_path, 'r') as rect_json:
-            query_rect = rect_json.read()
-        escaped_query_rect = urllib.quote(query_rect)
+        escaped_query_rect = get_loop_rect()
 
         url = '/v1/api/detail/?dataset_name=flu_shot_clinics&obs_date__ge=2013-01-01&obs_date__le=2013-12-31&location_geom__within=' + escaped_query_rect
         resp = self.app.get(url)
@@ -69,6 +72,32 @@ class DetailTests(unittest.TestCase):
         query = '/v1/api/detail/?dataset_name=flu_shot_clinics&obs_date__ge=2013-09-22&obs_date__le=2013-10-1&data_type=csv'
         resp = self.app.get(query)
         print resp.data'''
+
+
+class GridTests(unittest.TestCase):
+    # Assume same setup as Timeseries
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app().test_client()
+
+    def test_space_and_time(self):
+        escaped_query_rect = get_loop_rect()
+        query = 'v1/api/grid/?obs_date__ge=2013-1-1&obs_date_le=2014-1-1&dataset_name=flu_shot_clinics&location_geom__within=' + escaped_query_rect
+        resp = self.app.get(query)
+        response_data = json.loads(resp.data)
+        self.assertEqual(len(response_data['features']), 4)
+
+        # Each feature should have an associated square geometry with 5 points
+        # (4 points to a square, then repeat the first to close it)
+        squares = [feat['geometry']['coordinates'][0] for feat in response_data['features']]
+        self.assert_(all([len(square) == 5 for square in squares]))
+
+        # Each feature also needs a count of items found in that square.
+        # We expect 3 squares with 1 and 1 square with 2
+        counts = [feat['properties']['count'] for feat in response_data['features']]
+        self.assertEqual(counts.count(1), 3)
+        self.assertEqual(counts.count(2), 1)
+
 
 
 class TimeseriesRegressionTests(unittest.TestCase):
@@ -153,11 +182,7 @@ class TimeseriesRegressionTests(unittest.TestCase):
         self.assertEqual(name_to_series['flu_shot_clinics'], [0, 65])
 
     def test_geo_filter(self):
-        pwd = os.path.dirname(os.path.realpath(__file__))
-        rect_path = os.path.join(pwd, '../test_fixtures', 'loop_rectangle.json')
-        with open(rect_path, 'r') as rect_json:
-            query_rect = rect_json.read()
-        escaped_query_rect = urllib.quote(query_rect)
+        escaped_query_rect = get_loop_rect()
 
         url = '/v1/api/timeseries/?obs_date__ge=2013-01-01&obs_date__le=2013-12-31&agg=year&location_geom__within=' + escaped_query_rect
         resp = self.app.get(url)

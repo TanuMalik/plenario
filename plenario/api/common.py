@@ -7,7 +7,7 @@ from flask import make_response, request, current_app
 import csv
 from shapely.geometry import asShape
 from cStringIO import StringIO
-import math
+from plenario.utils.helpers import get_size_in_degrees
 
 cache = Cache(config=CACHE_CONFIG)
 
@@ -76,20 +76,6 @@ def make_csv(data):
     writer = csv.writer(outp)
     writer.writerows(data)
     return outp.getvalue()
-
-
-def get_size_in_degrees(meters, latitude):
-    earth_circumference = 40041000.0 # meters, average circumference
-    degrees_per_meter = 360.0 / earth_circumference
-
-    degrees_at_equator = meters * degrees_per_meter
-
-    latitude_correction = 1.0 / math.cos(latitude * (math.pi / 180.0))
-
-    degrees_x = degrees_at_equator * latitude_correction
-    degrees_y = degrees_at_equator
-
-    return degrees_x, degrees_y
 
 
 def extract_first_geometry_fragment(geojson):

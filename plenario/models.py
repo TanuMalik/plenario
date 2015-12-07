@@ -7,9 +7,10 @@ from sqlalchemy.dialects.postgresql import TIMESTAMP, DOUBLE_PRECISION, ARRAY
 from geoalchemy2 import Geometry
 from sqlalchemy.orm import synonym
 import sqlalchemy as sa
-from sqlalchemy.sql import text
+from plenario.utils.helpers import get_size_in_degrees
 from flask_bcrypt import Bcrypt
 from itertools import groupby
+import json
 
 
 from plenario.database import session, Base
@@ -128,6 +129,42 @@ class MetaTable(Base):
     @classmethod
     def get_by_dataset_name(cls, name):
         return session.query(cls).filter(cls.dataset_name == name).first()
+
+    def get_bbox_center(self):
+        result = session.execute(select([func.ST_AsGeoJSON(func.ST_centroid(self.bbox))]))
+        # returns [lon, lat]
+        return json.loads(result.first()[0])['coordinates']
+
+    def make_grid(self, resolution, geom=None, conditions=[]):
+        """
+        :param resolution: length of side of grid square in meters
+        :type resolution: int
+        :param geom: string representation of geojson fragment
+        :type geom: str
+        :param conditions: conditions on columns to filter on
+        :type conditions: list of SQLAlchemy binary operations (e.g. col > value)
+        :return: result proxy with all result rows
+                 size_x and size_y: the horizontal and vertical size of the grid squares in degrees
+        """
+
+        # We need to convert resolution (given in meters) to degrees - which is the unit of measure for EPSG 4326
+        # - in order to generate our grid.
+        center = self.get_bbox_center()
+        # center[1] is longitude
+        size_x, size_y = get_size_in_degrees(resolution, center[1])
+
+        # Generate a count for each resolution by resolution square
+        t = self.point_table
+        q = session.query(func.count(t.c.point_id),
+                          func.ST_SnapToGrid(t.c.geom, size_x, size_y).label('squares'))\
+            .filter(*conditions)\
+            .group_by('squares')
+
+        if geom:
+            q = q.filter(t.c.geom.ST_Within(func.ST_GeomFromGeoJSON(geom)))
+
+        return session.execute(q), size_x, size_y
+
 
     # Return select statement to execute or union
     def timeseries(self, agg_unit, start, end, geom=None):
