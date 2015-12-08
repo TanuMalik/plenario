@@ -1,12 +1,13 @@
-from plenario.database import session, app_engine, Base
+import datetime
+
+from sqlalchemy.exc import IntegrityError
+
 import plenario.models
 import plenario.settings
-from sqlalchemy.exc import IntegrityError
-import datetime
-from plenario.utils.weather import WeatherETL, WeatherStationsETL
-from plenario.utils.shape_etl import ShapeETL
-
+from plenario.database import session, app_engine, Base
+from plenario.etl.shape import ShapeETL
 from plenario.tasks import hello_world
+from plenario.utils.weather import WeatherETL, WeatherStationsETL
 
 
 def init_db():
