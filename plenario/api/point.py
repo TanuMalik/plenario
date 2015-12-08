@@ -386,7 +386,6 @@ def detail():
 @cache.cached(timeout=CACHE_TIMEOUT, key_prefix=make_cache_key)
 @crossdomain(origin="*")
 def grid():
-    print 'grid()'
     raw_query_params = request.args.copy()
 
     # First, make sure name of dataset was provided...
