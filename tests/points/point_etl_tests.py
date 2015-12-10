@@ -1,12 +1,15 @@
 from unittest import TestCase
 from plenario.models import MetaTable
-from plenario.database import session, Base
+from plenario.database import session, Base, app_engine
 import sqlalchemy as sa
-from plenario.etl.point import StagingTable
+from sqlalchemy import Table, Column, Integer, Date, Float, String
+from geoalchemy2 import Geometry
+from plenario.etl.point import StagingTable, ColumnInfo
 import os
 
 pwd = os.path.dirname(os.path.realpath(__file__))
 fixtures_path = os.path.join(pwd, '../test_fixtures')
+
 
 class StagingTableTests(TestCase):
     """
@@ -16,23 +19,54 @@ class StagingTableTests(TestCase):
     """
 
     def setUp(self):
-        # Make two new entries in MetaTable
-        # For one of those entries, insert a point table into the database (we'll eschew the dat_ convention)
-        self.unloaded_meta = MetaTable(url='nightvale.gov/dogpark.csv',
-                                       human_name='Dog Park Permits',
-                                       business_key='Hooded Figure ID',
-                                       observed_date='Date',
-                                       latitude='lat', longitude='lon',
-                                       approved_status=False)
-
-        self.existing_meta = MetaTable(url='nightvale.gov/crushes.csv',
+        # Make two new MetaTable objects
+        self.unloaded_meta = MetaTable(url='nightvale.gov/events.csv',
                                        human_name='Community Radio Events',
                                        business_key='Event Name',
                                        observed_date='Date',
                                        latitude='lat', longitude='lon',
                                        approved_status=True)
 
-        self.existing_table = sa.Table('community_radio_events', Base.metadata)
+        # For one of those entries, create a point table in the database (we'll eschew the dat_ convention)
+        self.existing_meta = MetaTable(url='nightvale.gov/dogpark.csv',
+                                       human_name='Dog Park Permits',
+                                       business_key='Hooded Figure ID',
+                                       observed_date='Date',
+                                       latitude='lat', longitude='lon',
+                                       approved_status=False)
+
+        self.existing_table = sa.Table('dog_park_permits', Base.metadata,
+                                       Column('point_id', Integer, primary_key=True),
+                                       Column('date', Date, nullable=False),
+                                       Column('lat', Float, nullable=False),
+                                       Column('lon', Float, nullable=False),
+                                       Column('geom', Geometry('POINT', srid=4326), nullable=False),
+                                       extend_existing=True)
+
+        Base.metadata.create_all(bind=app_engine)
+
+    def test_col_info_infer(self):
+        source_path = os.path.join(fixtures_path, 'community_radio_events.csv')
+        s_table = StagingTable(self.unloaded_meta, source_path=source_path)
+        cols = s_table.col_info
+        self.assertEqual(len(cols), 4)
+        expected_cols = [ColumnInfo('lat', Float, False), ColumnInfo('lon', Float, False),
+                         ColumnInfo('date', Date, False), ColumnInfo('event_name', String, False)]
+        for expected in expected_cols:
+            self.assertIn(expected, cols)
+
+    def test_col_info_existing(self):
+        source_path = os.path.join(fixtures_path, 'dog_park_permits.csv')
+        s_table = StagingTable(self.existing_meta, source_path=source_path)
+        observed_col_names = [col.name for col in s_table.col_info]
+        expected_col_names = ['lat', 'lon', 'date', 'point_id', 'geom']
+        self.assertEqual(set(observed_col_names), set(expected_col_names))
+        # I also wanted to test that the Postgres-dialect-specific types that got generated
+        # matched the general SQLAlchemy types specified in the table defnition.
+        # But that got hairy.
+
+    def test_col_info_provided(self):
+        pass
 
     def test_new_table(self):
         # For the entry in MetaTable without a table, create a staging table.
@@ -40,6 +74,7 @@ class StagingTableTests(TestCase):
         source_path = os.path.join(fixtures_path, 'community_radio_events.csv')
         s_table = StagingTable(self.unloaded_meta, source_path=source_path)
         sel = sa.select([sa.func.count(s_table.table)])
+        # Fun fact. If s_table.table is None, this statement is "SELECT count(*);" which evaluates to 1 (O_o)
         count = session.execute(sel).first()[0]
         self.assertEqual(count, 5)
 

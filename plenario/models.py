@@ -12,6 +12,7 @@ from flask_bcrypt import Bcrypt
 from itertools import groupby
 import json
 from hashlib import md5
+from collections import namedtuple
 
 from plenario.database import session, Base
 from plenario.utils.helpers import slugify
@@ -106,12 +107,20 @@ class MetaTable(Base):
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
+    def column_info(self):
+        ColumnInfo = namedtuple('ColumnInfo', ['name', 'type', 'nullable'])
+        # raises NoSuchTableError
+        t = self.point_table
+        #print type(t.c.lat.type)
+        return [ColumnInfo(c.name, c.type, c.nullable) for c in t.c]
+
     @property
     def point_table(self):
         try:
             return self._point_table
         except AttributeError:
-            self._point_table = Table('dat_' + self.dataset_name, Base.metadata, autoload=True, extend_existing=True)
+            # Removed _dat prefix. May the failing tests rain down like blood.
+            self._point_table = Table(self.dataset_name, Base.metadata, autoload=True, extend_existing=True)
             return self._point_table
 
     # Return a list of [
