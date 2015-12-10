@@ -112,6 +112,7 @@ class MetaTable(Base):
         # raises NoSuchTableError
         t = self.point_table
         #print type(t.c.lat.type)
+        # Why not just return column objects?
         return [ColumnInfo(c.name, c.type, c.nullable) for c in t.c]
 
     @property
@@ -229,6 +230,9 @@ class MetaTable(Base):
 
     # Return select statement to execute or union
     def timeseries(self, agg_unit, start, end, geom=None):
+        # Reading this blog post
+        # http://no0p.github.io/postgresql/2014/05/08/timeseries-tips-pg.html
+        # inspired this implementation.
         t = self.point_table
 
         # Create a CTE to represent every time bucket in the timeseries

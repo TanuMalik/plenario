@@ -7,7 +7,7 @@ from boto.s3.key import Key
 from plenario.settings import AWS_ACCESS_KEY, AWS_SECRET_KEY, S3_BUCKET
 
 
-class ETLFile:
+class ETLFile(object):
     """
     Encapsulates whether a file has been downloaded temporarily
     or is coming from the local file system.
@@ -26,6 +26,7 @@ class ETLFile:
         self.source_path = source_path
         self.source_url = source_url
         self.is_local = bool(source_path)
+        self._handle = None
 
     def __enter__(self):
         """
@@ -38,6 +39,15 @@ class ETLFile:
 
         # Return the whole ETLFile so that the `with foo as bar:` syntax looks right.
         return self
+
+    @property
+    def handle(self):
+        self._handle.seek(0)
+        return self._handle
+
+    @handle.setter
+    def handle(self, val):
+        self._handle = val
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         # If self.handle is to a file that was already on the file system,
