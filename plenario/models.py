@@ -108,12 +108,7 @@ class MetaTable(Base):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
     def column_info(self):
-        ColumnInfo = namedtuple('ColumnInfo', ['name', 'type', 'nullable'])
-        # raises NoSuchTableError
-        t = self.point_table
-        #print type(t.c.lat.type)
-        # Why not just return column objects?
-        return [ColumnInfo(c.name, c.type, c.nullable) for c in t.c]
+        return self.point_table.c
 
     @property
     def point_table(self):

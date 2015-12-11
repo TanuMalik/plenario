@@ -7,7 +7,6 @@ from plenario.utils.helpers import iter_column, slugify
 import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
-import traceback
 
 # DRY: also in models
 ColumnInfo = namedtuple('ColumnInfo', ['name', 'type', 'nullable'])
@@ -33,7 +32,7 @@ class StagingTable(object):
         # Get the Columns to construct our table
         try:
             # Problem: Does call to model mix SQLAlchemy sessions?
-            self.cols = self._from_ingested(meta.column_info())
+            self.cols = self._from_ingested()
         except NoSuchTableError as e:
             # This must be the first time we're ingesting the table
             if meta.contributed_data_types:
@@ -75,7 +74,7 @@ class StagingTable(object):
         table.drop(bind=engine, checkfirst=True)
         table.create(bind=engine)
 
-        names = [unicode(c.name) for c in self.cols]
+        names = [c.name for c in self.cols]
 
         copy_st = "COPY {t_name} ({cols}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER ',')".\
             format(t_name=s_table_name, cols=', '.join(names))
@@ -98,17 +97,17 @@ class StagingTable(object):
     def _make_col(name, type, nullable):
         return Column(name, type, nullable=nullable)
 
-    def _from_ingested(self, col_info):
+    def _from_ingested(self):
         """
-        :param col_info: list of ColumnInfo from an ingested table
         :return: Columns that will match the table in its CSV form
         """
+        col_info = self.meta.column_info()
         # Don't include the columns the ingested tables have for bookkeeping
         stripped = [c for c in col_info if c.name not in ['geom', 'point_date']]
         # Build up the columns. For 'point_id', use the original name.
         id_col_name = self.meta.business_key
         cols = [self._make_col(id_col_name, c.type, c.nullable) if c.name == 'point_id'
-                else self._make_col(*c)
+                else self._make_col(c.name, c.type, c.nullable)
                 for c in stripped]
         return cols
 
