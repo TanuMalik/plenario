@@ -87,9 +87,14 @@ class StagingTableTests(TestCase):
     def test_new_table(self):
         # For the entry in MetaTable without a table, create a staging table.
         # We'll need to read from a fixture csv.
-        source_path = os.path.join(fixtures_path, 'community_radio_events.csv')
-        s_table = StagingTable(self.unloaded_meta, source_path=source_path)
-        #print(s_table.table.select())
+        s_table = StagingTable(self.unloaded_meta, source_path=self.radio_path)
+        all_rows = session.execute(s_table.table.select()).fetchall()
+        self.assertEqual(len(all_rows), 5)
+
+    def test_existing_table(self):
+        # With a fixture CSV whose columns match the existing dataset,
+        # create a staging table.
+        s_table = StagingTable(self.existing_meta, source_path=self.dog_path)
         all_rows = session.execute(s_table.table.select()).fetchall()
         self.assertEqual(len(all_rows), 5)
 
@@ -97,12 +102,9 @@ class StagingTableTests(TestCase):
     def test_extra_column_failure(self):
         # With a fixture CSV that has one more column than the one that we inserted in the databse,
         # try to create the staging table and expect an Exception
-        self.assert_(False)
-
-    def test_existing_table(self):
-        # With a fixture CSV whose columns match the existing dataset,
-        # create a staging table.
         self.assert_(False)'''
+
+
 
     # A nice optimization will be to do a simple hash check,
     # but that can wait for a future release
