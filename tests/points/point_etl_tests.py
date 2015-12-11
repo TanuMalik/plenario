@@ -4,7 +4,7 @@ from plenario.database import session, Base, app_engine
 import sqlalchemy as sa
 from sqlalchemy import Table, Column, Integer, Date, Float, String
 from geoalchemy2 import Geometry
-from plenario.etl.point import StagingTable, ColumnInfo
+from plenario.etl.point import StagingTable
 import os
 import json
 
@@ -31,7 +31,7 @@ class StagingTableTests(TestCase):
                                        observed_date='Date',
                                        latitude='lat', longitude='lon',
                                        approved_status=True)
-        self.expected_radio_col_names = ['lat', 'lon', 'event_name', 'date']
+        self.expected_radio_col_names = ['lat', 'lon', 'event_name', 'date', 'line_num']
 
         self.existing_meta = MetaTable(url='nightvale.gov/dogpark.csv',
                                        human_name='Dog Park Permits',
@@ -39,7 +39,7 @@ class StagingTableTests(TestCase):
                                        observed_date='Date',
                                        latitude='lat', longitude='lon',
                                        approved_status=False)
-        self.expected_dog_col_names = ['lat', 'lon', 'hooded_figure_id', 'date']
+        self.expected_dog_col_names = ['lat', 'lon', 'hooded_figure_id', 'date', 'line_num']
 
         # For one of those entries, create a point table in the database (we'll eschew the dat_ convention)
         self.existing_table = sa.Table('dog_park_permits', Base.metadata,
@@ -71,7 +71,7 @@ class StagingTableTests(TestCase):
         self.assertEqual(set(observed_col_names), set(self.expected_dog_col_names))
 
     def test_col_info_provided(self):
-        # The frontend should send back strings compatible with the COL_VALUES in point/etl.py
+        # The frontend should send back strings compatible with the COL_VALUES in etl.point
         col_info_raw = [('event_name', 'string'),
                         ('date', 'date'),
                         ('lat', 'float'),
@@ -83,6 +83,10 @@ class StagingTableTests(TestCase):
 
         observed_names = self.extract_names(s_table.cols)
         self.assertEqual(set(observed_names), set(self.expected_radio_col_names))
+
+    '''
+    Are the files ingested as we expect?
+    '''
 
     def test_new_table(self):
         # For the entry in MetaTable without a table, create a staging table.
@@ -99,12 +103,18 @@ class StagingTableTests(TestCase):
         self.assertEqual(len(all_rows), 5)
 
     '''
-    def test_extra_column_failure(self):
+    Does the table disappear once it goes out of context?
+    '''
+
+    ''' Eh. Later
+    def test_self_cleaning(self):
+        pass'''
+
+
+    '''def test_extra_column_failure(self):
         # With a fixture CSV that has one more column than the one that we inserted in the databse,
         # try to create the staging table and expect an Exception
         self.assert_(False)'''
-
-
 
     # A nice optimization will be to do a simple hash check,
     # but that can wait for a future release
@@ -120,6 +130,14 @@ class UpsertTableTests(TestCase):
     Given a staging table that matches the columns of an existing table,
     can we upsert new and modified records into the existing table?
     And what happens when we need to bail?
+
+    I need a mechanism to create a "new" table and an "update" table from two other tables.
+
+    new_t = find_new_rows(staging, existing)
+    update_t = find_update_rows(staging, existing)
+
+    So I'll need to compare the unique id of the staging table to the unique id of the existing table.
+
     """
 
     # Maybe define a really simple 10-line table inline

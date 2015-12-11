@@ -1,5 +1,4 @@
 from plenario.etl.common import ETLFile
-from collections import namedtuple
 from csvkit.unicsv import UnicodeCSVReader
 from sqlalchemy.exc import NoSuchTableError
 from plenario.database import app_engine as engine
@@ -8,11 +7,9 @@ import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
 
-# DRY: also in models
-ColumnInfo = namedtuple('ColumnInfo', ['name', 'type', 'nullable'])
 etl_meta = MetaData()
 
-# Can probably move to common
+# Can move to common?
 class PlenarioETLError(Exception):
     def __init__(self, message):
         Exception.__init__(self, message)
@@ -20,6 +17,9 @@ class PlenarioETLError(Exception):
 
 
 # Should StagingTable itself be a context manager? Probably.
+# Missing:  Removing rows with an empty business key
+#           Setting geometry coded to (0,0) to NULL
+
 class StagingTable(object):
     def __init__(self, meta, source_path=None):
         """
@@ -70,11 +70,14 @@ class StagingTable(object):
         # Persist an empty table eagerly
         # so that we can access it when we drop down to a raw connection.
         s_table_name = 'staging_' + self.meta.dataset_name
+        # Test something out...
+        self.cols.append(Column('line_num', Integer, primary_key=True))
+
         table = Table(s_table_name, etl_meta, *self.cols, extend_existing=True)
         table.drop(bind=engine, checkfirst=True)
         table.create(bind=engine)
 
-        names = [c.name for c in self.cols]
+        names = [c.name for c in self.cols if c.name != 'line_num']
 
         copy_st = "COPY {t_name} ({cols}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER ',')".\
             format(t_name=s_table_name, cols=', '.join(names))
@@ -87,7 +90,6 @@ class StagingTable(object):
                 conn.commit()
                 return table
         except Exception as e:  # When the bulk copy fails on _any_ row, roll back the entire operation.
-            print e
             raise PlenarioETLError(e)
         finally:
             conn.close()
@@ -125,6 +127,9 @@ class StagingTable(object):
         return cols
 
     def _from_contributed(self, data_types):
+        """
+        :param data_types: List of dictionaries, each of which has 'field_name' and 'data_type' fields.
+        """
         COL_TYPES = {
             'boolean': Boolean,
             'integer': Integer,
@@ -140,4 +145,19 @@ class StagingTable(object):
         cols = [self._make_col(c['field_name'], COL_TYPES[c['data_type']], True) for c in data_types]
         return cols
 
+
+class UpsertFinder(object):
+
+    def __init__(self, staging, existing):
+        self.staging = staging
+        self.existing = existing
+
+    def find_new(self):
+        # Generate table whose rows have an ID not present in the existing table
+        # If there are duplicates in the staging table, grab the one lowest in the file
+        # Will I need to do the line_num thing?
+        pass
+
+    def insert_new(self):
+        pass
 
