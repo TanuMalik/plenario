@@ -6,6 +6,7 @@ from plenario.utils.helpers import iter_column, slugify
 import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
+from sqlalchemy import select, func, text
 
 etl_meta = MetaData()
 
@@ -59,6 +60,7 @@ class StagingTable(object):
             # Grab the handle to build a table from the CSV
             try:
                 self.table = self._make_table(file_helper.handle, self.cols)
+                # Remove malformed rows (by business logic) here.
             except Exception as e:
                 # Some stuff that could happen:
                     # There could be more columns in the source file than we expected.
@@ -77,8 +79,9 @@ class StagingTable(object):
         table.drop(bind=engine, checkfirst=True)
         table.create(bind=engine)
 
+        # Fill in the columns we expect from the CSV.
+        # line_num will get a sequence by default.
         names = [c.name for c in self.cols if c.name != 'line_num']
-
         copy_st = "COPY {t_name} ({cols}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER ',')".\
             format(t_name=s_table_name, cols=', '.join(names))
 
@@ -145,19 +148,66 @@ class StagingTable(object):
         cols = [self._make_col(c['field_name'], COL_TYPES[c['data_type']], True) for c in data_types]
         return cols
 
+    def _date_selectable(self):
+        date_col = func.cast(self.table.c[self.meta.observed_date], TIMESTAMP).\
+                label('point_date')
+        return date_col
 
-class UpsertFinder(object):
+    def _dup_ver_expr(self):
+        """
+        If multiple rows have the same unique ID,
+        mark the one highest in the source dataset as dup_ver == 1
 
-    def __init__(self, staging, existing):
-        self.staging = staging
-        self.existing = existing
+        Returns an Over expression
+        """
 
-    def find_new(self):
+        # Group by business key and rank by line number.
+        subselect = func.rank().\
+            over(partition_by=self.table.c[self.meta.business_key],
+                          # ... and rank by line number.
+                 order_by=self.table.columns['line_num'].desc()).\
+            alias('dup_ver')
+
+        return subselect
+
+    def _geom_selectable(self):
+        # Derive point in space from either lat/long columns or single location column
+        # Dang, can't use text as-is.
+        # Need to operate on self.table, not dat_[table_name]
+
+        t = self.table
+        m = self.meta
+
+        if self.meta.latitude and self.meta.longitude:
+            geom_col = func.ST_SetSRID(func.ST_Point(t.c[m.longitude],
+                                                     t.c[m.latitude]))
+
+        elif self.meta.location:
+            geom_col = text(
+                    '''SELECT ST_PointFromText('POINT(' || subq.lon || ' ' || subq.lat || ')', 4326) \
+                          FROM (SELECT a[1] AS lon, a[2] AS lat
+                                  FROM (SELECT regexp_matches({}, '\((.*), (.*)\)') FROM {} AS FLOAT8(a))
+                                AS subq)
+                       AS geom;'''.format(t.c[m.location], 'staging_' + m.dataset_name))
+        else:
+            raise PlenarioETLError('Staging table does not have geometry information.')
+
+        return geom_col
+
+    def insert_into(self, existing):
         # Generate table whose rows have an ID not present in the existing table
         # If there are duplicates in the staging table, grab the one lowest in the file
-        # Will I need to do the line_num thing?
-        pass
 
-    def insert_new(self):
-        pass
+        date_col = self._date_selectable()
+        id_col = self._dup_ver_expr()
+        geom_col = self._geom_selectable()
 
+        # We'll be adding all the columns in the source dataset except for line_number
+        # And business_key will be ther under a different name (point_id)
+        source_cols = [c for c in self.cols if c.name not in ['line_num', self.meta.business_key]]
+        # We'll also add our derived columns for geometry, observation date, and unique ID.
+        new_cols = source_cols + [geom_col, date_col, id_col]
+
+        sel = select(new_cols).where(id_col == 1)
+        ins = existing.insert().from_select(new_cols, sel)
+        engine.execute(ins)
