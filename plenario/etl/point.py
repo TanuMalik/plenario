@@ -79,9 +79,7 @@ class StagingTable(object):
         # Test something out...
         self.cols.append(Column('line_num', Integer, primary_key=True))
 
-        print 'About to extend'
         table = Table(s_table_name, self.md, *self.cols, extend_existing=True)
-        print 'Extended'
         table.drop(bind=engine, checkfirst=True)
         table.create(bind=engine)
 
@@ -160,45 +158,29 @@ class StagingTable(object):
         return cols
 
     def _date_selectable(self):
-        date_col = func.cast(self.table.c[self.meta.observed_date], TIMESTAMP).\
+        """
+        Make a selectable where we take the dataset's temporal column
+        And cast every record to a Postgres TIMESTAMP
+        """
+
+        return func.cast(self.table.c[self.meta.observed_date], TIMESTAMP).\
                 label('point_date')
-        return date_col
 
-    def _dup_ver_expr(self, existing):
+    def _dup_ver_selectable(self):
         """
-        If multiple rows have the same unique ID,
-        mark the one highest in the source dataset as dup_ver == 1
+        Make a selectable that groups together all records in the source dataset having the same unique ID
+        and labels each member of the group with a duplicate version number.
+        1 for the version highest in the source file.
         """
-        t = self.table
-        m = self.meta
-
-        geom_func = self._geom_selectable()
-        date_col = self._date_selectable()
-
-        # The select_from and where clauses ensure we're only looking at records
-        # that don't have a unique ID that's present in the existing dataset.
-        # From the set of records with new IDs, lump together the records with the same ID
-        # and assign a dup_ver to each, with 1 going to the record highest in the source file.
-        # Finally, include the id itself in the common table expression to join to the staging table.
-        cte = select([func.rank().
-                            over(partition_by=t.c[m.business_key],
-                            # ... and rank by line number.
-                                 order_by=t.columns['line_num'].desc()).
-                            label('dup_ver'),
-                      t.c[m.business_key].label('id'),
-                      geom_func.label('geom'),
-                      date_col.label('point_date')]).\
-            select_from(t.outerjoin(existing, t.c[m.business_key] == existing.c.point_id)).\
-            where(existing.c.point_id == None).\
-            alias('id_cte')
-
-        return cte
+        return func.rank().\
+            over(partition_by=self.table.c[self.meta.business_key],
+                 order_by=self.table.columns['line_num'].desc())
 
     def _geom_selectable(self):
-        # Derive point in space from either lat/long columns or single location column
-        # Dang, can't use text as-is.
-        # Need to operate on self.table, not dat_[table_name]
-
+        """
+        Derive selectable with a PostGIS point in 4326 (naive lon-lat) projection
+        derived from either the latitude and longitude columns or single location column
+        """
         t = self.table
         m = self.meta
 
@@ -217,6 +199,32 @@ class StagingTable(object):
             raise PlenarioETLError('Staging table does not have geometry information.')
 
         return geom_col
+    def _dup_ver_expr(self, existing):
+        """
+        If multiple rows have the same unique ID,
+        mark the one highest in the source dataset as dup_ver == 1
+        """
+        t = self.table
+        m = self.meta
+
+        geom_func = self._geom_selectable()
+        date_col = self._date_selectable()
+        dup_sel = self._dup_ver_selectable()
+
+        # The select_from and where clauses ensure we're only looking at records
+        # that don't have a unique ID that's present in the existing dataset.
+        # From the set of records with new IDs, lump together the records with the same ID
+        # and assign a dup_ver to each, with 1 going to the record highest in the source file.
+        # Finally, include the id itself in the common table expression to join to the staging table.
+        cte = select([dup_sel.label('dup_ver'),
+                      t.c[m.business_key].label('id'),
+                      geom_func.label('geom'),
+                      date_col.label('point_date')]).\
+            select_from(t.outerjoin(existing, t.c[m.business_key] == existing.c.point_id)).\
+            where(existing.c.point_id == None).\
+            alias('id_cte')
+
+        return cte
 
     def insert_into(self, existing):
         # Generate table whose rows have an ID not present in the existing table
@@ -238,9 +246,7 @@ class StagingTable(object):
         # Need to exclude rows with business keys that were already present in the existing table
         sel = select(new_cols).\
             select_from(id_cte.join(self.table, id_cte.c.id == self.table.c[self.meta.business_key]))
-        print sel
         ins = existing.insert().from_select(new_cols, sel)
-        print ins
         engine.execute(ins)
 
     def create_new(self):
@@ -256,6 +262,6 @@ class StagingTable(object):
         ]
 
         new_table = Table(self.meta.dataset_name, self.md, *(verbatim_cols + derived_cols))
-        new_table.create(bind=engine)
+        new_table.create(engine)
         self.insert_into(new_table)
         return new_table

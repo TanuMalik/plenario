@@ -2,7 +2,8 @@ from unittest import TestCase
 from plenario.models import MetaTable
 from plenario.database import session, Base, app_engine
 import sqlalchemy as sa
-from sqlalchemy import Table, Column, Integer, Date, Float, String, TIMESTAMP
+from sqlalchemy import Table, Column, Integer, Date, Float, String, TIMESTAMP, MetaData
+from sqlalchemy.exc import NoSuchTableError
 from geoalchemy2 import Geometry
 from plenario.etl.point import StagingTable
 import os
@@ -12,6 +13,13 @@ from datetime import date
 pwd = os.path.dirname(os.path.realpath(__file__))
 fixtures_path = os.path.join(pwd, '../test_fixtures')
 
+
+def drop_if_exists(table_name):
+    try:
+        t = Table(table_name, MetaData(), extend_existing=True)
+        t.drop(app_engine, checkfirst=True)
+    except NoSuchTableError:
+        pass
 
 class StagingTableTests(TestCase):
     """
@@ -42,17 +50,15 @@ class StagingTableTests(TestCase):
         cls.expected_dog_col_names = ['lat', 'lon', 'hooded_figure_id', 'date', 'line_num']
 
         # For one of those entries, create a point table in the database (we'll eschew the dat_ convention)
+        drop_if_exists('dog_park_permits')
         cls.existing_table = sa.Table('dog_park_permits', Base.metadata,
                                       Column('point_id', Integer, primary_key=True),
                                       Column('point_date', TIMESTAMP, nullable=False),
                                       Column('date', Date, nullable=True),
                                       Column('lat', Float, nullable=False),
                                       Column('lon', Float, nullable=False),
-                                      Column('geom', Geometry('POINT', srid=4326), nullable=True),
-                                      extend_existing=True)
-
-        cls.existing_table.drop(checkfirst=True)
-        Base.metadata.create_all(bind=app_engine)
+                                      Column('geom', Geometry('POINT', srid=4326), nullable=True))
+        cls.existing_table.create()
 
         ins = cls.existing_table.insert().values(point_id=1,
                                                   point_date=date(2015, 1, 2),
@@ -122,14 +128,20 @@ class StagingTableTests(TestCase):
         staging = StagingTable(self.existing_meta, source_path=self.dog_path)
         existing = self.existing_table
         staging.insert_into(existing)
+        pre_existing_row = session.execute(existing.select().where(existing.c.point_id == 1)).fetchone()
+        self.assertEqual(date(2015, 1, 2), pre_existing_row.point_date.date())
+
         all_rows = session.execute(existing.select()).fetchall()
         self.assertEqual(len(all_rows), 5)
 
     def test_new_table(self):
         staging = StagingTable(self.unloaded_meta, source_path=self.radio_path)
+        drop_if_exists(self.unloaded_meta.dataset_name)
         new_table = staging.create_new()
         all_rows = session.execute(new_table.select()).fetchall()
         self.assertEqual(len(all_rows), 5)
+        session.close()
+        new_table.drop(app_engine, checkfirst=True)
 
 
     '''
