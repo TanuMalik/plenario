@@ -34,7 +34,7 @@ class StagingTable(object):
         try:
             # Problem: Does call to model mix SQLAlchemy sessions?
             self.cols = self._from_ingested()
-        except NoSuchTableError as e:
+        except NoSuchTableError:
             # This must be the first time we're ingesting the table
             if meta.contributed_data_types:
                 types = json.loads(meta.contributed_data_types)
@@ -84,6 +84,7 @@ class StagingTable(object):
         names = [c.name for c in self.cols if c.name != 'line_num']
         copy_st = "COPY {t_name} ({cols}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER ',')".\
             format(t_name=s_table_name, cols=', '.join(names))
+        # print copy_st
 
         # In order to issue a COPY, we need to drop down to the psycopg2 DBAPI.
         conn = engine.raw_connection()
@@ -106,14 +107,15 @@ class StagingTable(object):
         """
         :return: Columns that will match the table in its CSV form
         """
-        col_info = self.meta.column_info()
-        # Don't include the columns the ingested tables have for bookkeeping
-        stripped = [c for c in col_info if c.name not in ['geom', 'point_date']]
-        # Build up the columns. For 'point_id', use the original name.
-        id_col_name = self.meta.business_key
-        cols = [self._make_col(id_col_name, c.type, c.nullable) if c.name == 'point_id'
+        ingested_cols = self.meta.column_info()
+        # Don't include the geom and point_date columns.
+        # They're derived from the source data and won't be present in the source CSV
+        original_cols = [c for c in ingested_cols if c.name not in ['geom', 'point_date']]
+        # Finally, the point_id column is present in the source, but under its original name.
+        cols = [self._make_col(self.meta.business_key, c.type, c.nullable) if c.name == 'point_id'
                 else self._make_col(c.name, c.type, c.nullable)
-                for c in stripped]
+                for c in original_cols]
+
         return cols
 
     def _from_inference(self, f):
@@ -153,22 +155,30 @@ class StagingTable(object):
                 label('point_date')
         return date_col
 
-    def _dup_ver_expr(self):
+    def _dup_ver_expr(self, existing):
         """
         If multiple rows have the same unique ID,
         mark the one highest in the source dataset as dup_ver == 1
-
-        Returns an Over expression
         """
+        t = self.table
+        m = self.meta
 
-        # Group by business key and rank by line number.
-        subselect = func.rank().\
-            over(partition_by=self.table.c[self.meta.business_key],
-                          # ... and rank by line number.
-                 order_by=self.table.columns['line_num'].desc()).\
-            alias('dup_ver')
+        # The select_from and where clauses ensure we're only looking at records
+        # that don't have a unique ID that's present in the existing dataset.
+        # From the set of records with new IDs, lump together the records with the same ID
+        # and assign a dup_ver to each, with 1 going to the record highest in the source file.
+        # Finally, include the id itself in the common table expression to join to the staging table.
+        cte = select([func.rank().
+                            over(partition_by=t.c[m.business_key],
+                            # ... and rank by line number.
+                                 order_by=t.columns['line_num'].desc()).
+                            label('dup_ver'),
+                      t.c[m.business_key].label('id')]).\
+            select_from(t.outerjoin(existing, t.c[m.business_key] == existing.c.point_id)).\
+            where(existing.c.point_id == None).\
+            alias('id_cte')
 
-        return subselect
+        return cte
 
     def _geom_selectable(self):
         # Derive point in space from either lat/long columns or single location column
@@ -178,11 +188,11 @@ class StagingTable(object):
         t = self.table
         m = self.meta
 
-        if self.meta.latitude and self.meta.longitude:
-            geom_col = func.ST_SetSRID(func.ST_Point(t.c[m.longitude],
-                                                     t.c[m.latitude]))
+        if m.latitude and m.longitude:
+            geom_col = func.ST_SetSRID(func.ST_Point(t.c[m.longitude], t.c[m.latitude]),
+                                       4326)
 
-        elif self.meta.location:
+        elif m.location:
             geom_col = text(
                     '''SELECT ST_PointFromText('POINT(' || subq.lon || ' ' || subq.lat || ')', 4326) \
                           FROM (SELECT a[1] AS lon, a[2] AS lat
@@ -198,16 +208,36 @@ class StagingTable(object):
         # Generate table whose rows have an ID not present in the existing table
         # If there are duplicates in the staging table, grab the one lowest in the file
 
-        date_col = self._date_selectable()
-        id_col = self._dup_ver_expr()
+        #date_col = self._date_selectable()
+        id_cte = self._dup_ver_expr(existing)
         geom_col = self._geom_selectable()
+        new_cols = []
+        for c in self.cols:
+            if c.name == 'line_num':
+                continue
+            elif c.name == self.meta.business_key:
+                new_cols.append(c.label('point_id'))
+            else:
+                new_cols.append(c)
 
+        #new_cols.append(geom_col)
         # We'll be adding all the columns in the source dataset except for line_number
-        # And business_key will be ther under a different name (point_id)
-        source_cols = [c for c in self.cols if c.name not in ['line_num', self.meta.business_key]]
+        # And business_key will be there under a different name (point_id)
+        #source_cols = [c for c in self.cols if c.name not in ['line_num', self.meta.business_key]]
         # We'll also add our derived columns for geometry, observation date, and unique ID.
-        new_cols = source_cols + [geom_col, date_col, id_col]
+        #source_cols.append()
+        # Find business_key col
+        #for col in self.cols:
+        #    if col.name == self.meta.business_key:
 
-        sel = select(new_cols).where(id_col == 1)
+
+        #new_cols = source_cols   # [geom_col, date_col, id_col]
+
+        # Only include rows that are of the lowest dup_ver
+        # Need to exclude rows with business keys that were already present in the existing table
+        sel = select(new_cols).\
+            select_from(id_cte.join(self.table, id_cte.c.id == self.table.c[self.meta.business_key]))
+        print sel
         ins = existing.insert().from_select(new_cols, sel)
+        print ins
         engine.execute(ins)

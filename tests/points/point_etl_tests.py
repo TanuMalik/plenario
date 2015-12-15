@@ -7,6 +7,7 @@ from geoalchemy2 import Geometry
 from plenario.etl.point import StagingTable
 import os
 import json
+from datetime import date
 
 pwd = os.path.dirname(os.path.realpath(__file__))
 fixtures_path = os.path.join(pwd, '../test_fixtures')
@@ -23,34 +24,48 @@ class StagingTableTests(TestCase):
         cls.dog_path = os.path.join(fixtures_path, 'dog_park_permits.csv')
         cls.radio_path = os.path.join(fixtures_path, 'community_radio_events.csv')
 
-    def setUp(self):
         # Make two new MetaTable objects
-        self.unloaded_meta = MetaTable(url='nightvale.gov/events.csv',
-                                       human_name='Community Radio Events',
-                                       business_key='Event Name',
-                                       observed_date='Date',
-                                       latitude='lat', longitude='lon',
-                                       approved_status=True)
-        self.expected_radio_col_names = ['lat', 'lon', 'event_name', 'date', 'line_num']
+        cls.unloaded_meta = MetaTable(url='nightvale.gov/events.csv',
+                                      human_name='Community Radio Events',
+                                      business_key='Event Name',
+                                      observed_date='Date',
+                                      latitude='lat', longitude='lon',
+                                      approved_status=True)
+        cls.expected_radio_col_names = ['lat', 'lon', 'event_name', 'date', 'line_num']
 
-        self.existing_meta = MetaTable(url='nightvale.gov/dogpark.csv',
-                                       human_name='Dog Park Permits',
-                                       business_key='Hooded Figure ID',
-                                       observed_date='Date',
-                                       latitude='lat', longitude='lon',
-                                       approved_status=False)
-        self.expected_dog_col_names = ['lat', 'lon', 'hooded_figure_id', 'date', 'line_num']
+        cls.existing_meta = MetaTable(url='nightvale.gov/dogpark.csv',
+                                      human_name='Dog Park Permits',
+                                      business_key='Hooded Figure ID',
+                                      observed_date='Date',
+                                      latitude='lat', longitude='lon',
+                                      approved_status=False)
+        cls.expected_dog_col_names = ['lat', 'lon', 'hooded_figure_id', 'date', 'line_num']
 
         # For one of those entries, create a point table in the database (we'll eschew the dat_ convention)
-        self.existing_table = sa.Table('dog_park_permits', Base.metadata,
+        cls.existing_table = sa.Table('dog_park_permits', Base.metadata,
                                        Column('point_id', Integer, primary_key=True),
                                        Column('date', Date, nullable=False),
                                        Column('lat', Float, nullable=False),
                                        Column('lon', Float, nullable=False),
-                                       Column('geom', Geometry('POINT', srid=4326), nullable=False),
+                                       Column('geom', Geometry('POINT', srid=4326), nullable=True),
                                        extend_existing=True)
 
+        cls.existing_table.drop(checkfirst=True)
         Base.metadata.create_all(bind=app_engine)
+
+        ins = cls.existing_table.insert().values(point_id=1,
+                                                  date=date(2015, 1, 2),
+                                                  lon=-87.6495076896,
+                                                  lat=41.7915865543,
+                                                  geom=None)
+        app_engine.execute(ins)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.existing_table.drop(checkfirst=True)
+
+    def tearDown(self):
+        session.close()
 
     '''
     Do the names of created columns match what we expect?
@@ -102,6 +117,12 @@ class StagingTableTests(TestCase):
         all_rows = session.execute(s_table.table.select()).fetchall()
         self.assertEqual(len(all_rows), 5)
 
+    def test_insert_data(self):
+        staging = StagingTable(self.existing_meta, source_path=self.dog_path)
+        existing = self.existing_table
+        staging.insert_into(existing)
+
+
     '''
     Does the table disappear once it goes out of context?
     '''
@@ -141,6 +162,9 @@ class UpsertTableTests(TestCase):
     """
 
     # Maybe define a really simple 10-line table inline
+
+    def setUp(self):
+        pass
 
     def test_no_overlap(self):
         pass
