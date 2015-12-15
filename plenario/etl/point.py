@@ -7,8 +7,10 @@ import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
 from sqlalchemy import select, func, text
+from copy import copy
+from geoalchemy2 import Geometry
 
-etl_meta = MetaData()
+#etl_meta = MetaData()
 
 # Can move to common?
 class PlenarioETLError(Exception):
@@ -28,7 +30,9 @@ class StagingTable(object):
         :param source_path: path of source file on local filesystem
         :return:
         """
+        # Must change these var names
         self.meta = meta
+        self.md = MetaData()
 
         # Get the Columns to construct our table
         try:
@@ -59,7 +63,7 @@ class StagingTable(object):
 
             # Grab the handle to build a table from the CSV
             try:
-                self.table = self._make_table(file_helper.handle, self.cols)
+                self.table = self._make_table(file_helper.handle)
                 # Remove malformed rows (by business logic) here.
             except Exception as e:
                 # Some stuff that could happen:
@@ -68,14 +72,16 @@ class StagingTable(object):
                 # Can we check here to see if uniqueness constraint was violated?
                 raise PlenarioETLError(e)
 
-    def _make_table(self, f, col_info):
+    def _make_table(self, f):
         # Persist an empty table eagerly
         # so that we can access it when we drop down to a raw connection.
         s_table_name = 'staging_' + self.meta.dataset_name
         # Test something out...
         self.cols.append(Column('line_num', Integer, primary_key=True))
 
-        table = Table(s_table_name, etl_meta, *self.cols, extend_existing=True)
+        print 'About to extend'
+        table = Table(s_table_name, self.md, *self.cols, extend_existing=True)
+        print 'Extended'
         table.drop(bind=engine, checkfirst=True)
         table.create(bind=engine)
 
@@ -102,6 +108,9 @@ class StagingTable(object):
     @staticmethod
     def _make_col(name, type, nullable):
         return Column(name, type, nullable=nullable)
+
+    def _copy_col(self, col):
+        return self._make_col(col.name, col.type, col.nullable)
 
     def _from_ingested(self):
         """
@@ -233,3 +242,20 @@ class StagingTable(object):
         ins = existing.insert().from_select(new_cols, sel)
         print ins
         engine.execute(ins)
+
+    def create_new(self):
+        # The columns we're taking straight from the source file
+        # This listcomp got out of hand
+        verbatim_cols = [self._copy_col(c) if c.name != self.meta.business_key
+                         else Column('point_id', c.type, primary_key=True)
+                         for c in self.cols if c.name != 'line_num']
+
+        derived_cols = [
+            Column('point_date', TIMESTAMP, nullable=False),
+            Column('geom', Geometry('POINT', srid=4326), nullable=True)
+        ]
+
+        new_table = Table(self.meta.dataset_name, self.md, *(verbatim_cols + derived_cols))
+        new_table.create(bind=engine)
+        self.insert_into(new_table)
+        return new_table
