@@ -282,8 +282,7 @@ class PlenarioETL(object):
                 dt, nullable = d_type
                 cols.append(Column(col_name, dt, nullable=nullable))
 
-            # Final column has columns whose values must be unique.
-            # Generated from business_key, dup_ver, and dataset_name.
+            # Combination of business key and dup_ver guaranteed unique
             cols.append(UniqueConstraint(slugify(self.business_key), 'dup_ver',
                                          name='%s_ix' % self.dataset_name[:50]))
 
@@ -368,7 +367,8 @@ class PlenarioETL(object):
 
         # The following code sets lat/lng to NULL when the given coordinate is (0,0) (e.g. off the coast of Africa).
         # This was a problem for: http://plenario-dev.s3.amazonaws.com/sfpd_incident_all_datetime.csv
-        if self.latitude and self.longitude:        
+        # I think we're better off deleting rows like this.
+        if self.latitude and self.longitude:
             upd_st = """
                      UPDATE src_%s SET %s = NULL , %s = NULL FROM 
                      (SELECT %s FROM src_%s WHERE %s=0 and %s =0) AS ids 
@@ -446,7 +446,7 @@ class PlenarioETL(object):
             self.src_table.c[slugify(self.business_key)],
             self.src_table.c['line_num'],
         ]
-
+        # Does this only find dups inside of src_table?
         cols.append(func.rank()
                     # ... group by business key,
                     .over(partition_by=getattr(self.src_table.c, slugify(self.business_key)),
@@ -457,6 +457,9 @@ class PlenarioETL(object):
 
         # Make these three columns our dup_table.
         sel = select(cols, from_obj=self.src_table)
+        # dup_table is composed entirely of data derived from src_table
+        # The intent here is to dedupe the source table.
+        # So all dup_ver's actually come from single snapshots of a table!
         ins = self.dup_table.insert()\
             .from_select(self.dup_table.columns, sel)
         with engine.begin() as conn:
@@ -477,22 +480,24 @@ class PlenarioETL(object):
 
         dup_tablename = self.dup_table.name
 
-        # Where possible, find where bk's and dup_ver's line up
+        # Which of the records in the existing table have an ID that matches the IDs in the duplicates.
         outer = outerjoin(j, self.dat_table,
                           and_(self.dat_table.c[bk] == j.c['%s_%s' % (dup_tablename, bk)],
                                self.dat_table.c['dup_ver'] == j.c['%s_dup_ver' % dup_tablename]))
 
+        # Whether bk is null tells us that this record doesn't exist in the source.
         sel_cols = [
             self.src_table.c[bk],
             self.src_table.c['line_num'],
             self.dup_table.c['dup_ver']
         ]
 
-        # If we are adding this dataset for the first time, bring in all of the deup_ver info
+        # If we are adding this dataset for the first time, bring in all of the dup_ver info
         sel = select(sel_cols).select_from(outer)
 
         if not added:  # If we are updating, (not adding)
             # only grab the dup_ver info not found in dat_table
+            # This implies that the dup_ver=1 version of a record will never be updated
             sel = sel.where(self.dat_table.c['%s_row_id' % self.dataset_name] == None)
 
         # Insert the new dup_ver info into new_table.
@@ -516,21 +521,27 @@ class PlenarioETL(object):
         # Take all columns from src_table (excluding most of the 'meta' columns)
         skip_cols = ['%s_row_id' % self.dataset_name,'end_date', 'current_flag', 'line_num']
         from_vals = []
+        # When this record started being the "correct" one
+        # Is start_date first?
         from_vals.append(text("'%s' AS start_date" % datetime.now().isoformat()))
+        # We want dup_ver in the end product
         from_vals.append(self.new_table.c.dup_ver)
 
+        # Insert most of the src_table cols
         for c_src in self.src_table.columns:
             if c_src.name not in skip_cols:
                 from_vals.append(c_src)
         sel = select(from_vals, from_obj=self.src_table)
 
         bk = slugify(self.business_key)
+        # I think this relies on the columns being in the same order
         ins = self.dat_table.insert()\
             .from_select(
-                [c for c in self.dat_table.columns if c.name not in skip_cols], 
-                sel.select_from(self.src_table.join(self.new_table, 
+                #
+                [c for c in self.dat_table.columns if c.name not in skip_cols],  # Insert into dat_table...
+                sel.select_from(self.src_table.join(self.new_table,              # the src_table stuff plus new_table's dup_ver
                         and_(
-                            self.src_table.c.line_num == self.new_table.c.line_num,
+                            self.src_table.c.line_num == self.new_table.c.line_num,  #  Where their line_numbers match up (so where there are records in new_table)
                             getattr(self.src_table.c, bk) == getattr(self.new_table.c, bk),
                         )
                     ))
