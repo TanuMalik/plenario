@@ -7,10 +7,8 @@ import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
 from sqlalchemy import select, func, text
-from copy import copy
 from geoalchemy2 import Geometry
 
-#etl_meta = MetaData()
 
 # Can move to common?
 class PlenarioETLError(Exception):
@@ -22,7 +20,6 @@ class PlenarioETLError(Exception):
 # Should StagingTable itself be a context manager? Probably.
 # Missing:  Removing rows with an empty business key
 #           Setting geometry coded to (0,0) to NULL
-
 class StagingTable(object):
     def __init__(self, meta, source_path=None):
         """
@@ -199,62 +196,43 @@ class StagingTable(object):
             raise PlenarioETLError('Staging table does not have geometry information.')
 
         return geom_col
-    def _dup_ver_expr(self, existing):
+
+    def _derived_cte(self, existing):
         """
-        If multiple rows have the same unique ID,
-        mark the one highest in the source dataset as dup_ver == 1
+        Construct a gnarly Common Table Expression that generates all of the columns
+        that we want to derive from
         """
         t = self.table
         m = self.meta
 
-        geom_func = self._geom_selectable()
-        date_col = self._date_selectable()
+        geom_sel = self._geom_selectable()
+        date_sel = self._date_selectable()
         dup_sel = self._dup_ver_selectable()
 
         # The select_from and where clauses ensure we're only looking at records
         # that don't have a unique ID that's present in the existing dataset.
-        # From the set of records with new IDs, lump together the records with the same ID
+        #
+        # From the set of records with new IDs, group together the records with the same ID
         # and assign a dup_ver to each, with 1 going to the record highest in the source file.
+        #
         # Finally, include the id itself in the common table expression to join to the staging table.
         cte = select([dup_sel.label('dup_ver'),
                       t.c[m.business_key].label('id'),
-                      geom_func.label('geom'),
-                      date_col.label('point_date')]).\
+                      geom_sel.label('geom'),
+                      date_sel.label('point_date')]).\
             select_from(t.outerjoin(existing, t.c[m.business_key] == existing.c.point_id)).\
             where(existing.c.point_id == None).\
             alias('id_cte')
 
         return cte
 
-    def insert_into(self, existing):
-        # Generate table whose rows have an ID not present in the existing table
-        # If there are duplicates in the staging table, grab the one lowest in the file
-        id_cte = self._dup_ver_expr(existing)
-        new_cols = []
-        for c in self.cols:
-            if c.name == 'line_num':
-                continue
-            elif c.name == self.meta.business_key:
-                new_cols.append(c.label('point_id'))
-            else:
-                new_cols.append(c)
-
-        new_cols += [id_cte.c.geom, id_cte.c.point_date]
-
-
-        # Only include rows that are of the lowest dup_ver
-        # Need to exclude rows with business keys that were already present in the existing table
-        sel = select(new_cols).\
-            select_from(id_cte.join(self.table, id_cte.c.id == self.table.c[self.meta.business_key]))
-        ins = existing.insert().from_select(new_cols, sel)
-        engine.execute(ins)
-
     def create_new(self):
         # The columns we're taking straight from the source file
         # This listcomp got out of hand
         verbatim_cols = [self._copy_col(c) if c.name != self.meta.business_key
                          else Column('point_id', c.type, primary_key=True)
-                         for c in self.cols if c.name != 'line_num']
+                         for c in self.cols
+                         if c.name != 'line_num']
 
         derived_cols = [
             Column('point_date', TIMESTAMP, nullable=False),
@@ -265,3 +243,28 @@ class StagingTable(object):
         new_table.create(engine)
         self.insert_into(new_table)
         return new_table
+
+    def insert_into(self, existing):
+        # Generate table whose rows have an ID not present in the existing table
+        # If there are duplicates in the staging table, grab the one lowest in the file
+        cte = self._derived_cte(existing)
+        ins_cols = []
+        for c in self.cols:
+            if c.name == 'line_num':
+                continue
+            elif c.name == self.meta.business_key:
+                ins_cols.append(c.label('point_id'))
+            else:
+                ins_cols.append(c)
+
+        ins_cols += [cte.c.geom, cte.c.point_date]
+
+        # The cte only includes rows with business keys that weren't present in the existing table
+        # Here, we also restrict our selection to rows that are of the lowest dup_ver (highest in the source file)
+        sel = select(ins_cols).\
+            select_from(cte.join(self.table, cte.c.id == self.table.c[self.meta.business_key])).\
+            where(cte.c.dup_ver == 1)
+        # Insert all the original and derived columns into the table
+        ins = existing.insert().from_select(ins_cols, sel)
+        engine.execute(ins)
+

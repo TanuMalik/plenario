@@ -157,40 +157,7 @@ class StagingTableTests(TestCase):
         # With a fixture CSV that has one more column than the one that we inserted in the databse,
         # try to create the staging table and expect an Exception
         self.assert_(False)'''
-
-
-class UpsertTableTests(TestCase):
-    """
-    Given a staging table that matches the columns of an existing table,
-    can we upsert new and modified records into the existing table?
-    And what happens when we need to bail?
-
-    I need a mechanism to create a "new" table and an "update" table from two other tables.
-
-    new_t = find_new_rows(staging, existing)
-    update_t = find_update_rows(staging, existing)
-
-    So I'll need to compare the unique id of the staging table to the unique id of the existing table.
-
-    """
-
-    # Maybe define a really simple 10-line table inline
-
-    def setUp(self):
-        pass
-
-    def test_no_overlap(self):
-        pass
-
-    def test_update_records(self):
-        pass
-
-    def test_insert_new_records(self):
-        pass
-
-    def test_fail_on_duplicates(self):
-        pass
-
+    
 
 class UpdateMetaTests(TestCase):
     pass
