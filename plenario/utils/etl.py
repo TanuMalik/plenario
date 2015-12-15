@@ -367,7 +367,6 @@ class PlenarioETL(object):
 
         # The following code sets lat/lng to NULL when the given coordinate is (0,0) (e.g. off the coast of Africa).
         # This was a problem for: http://plenario-dev.s3.amazonaws.com/sfpd_incident_all_datetime.csv
-        # I think we're better off deleting rows like this.
         if self.latitude and self.longitude:
             upd_st = """
                      UPDATE src_%s SET %s = NULL , %s = NULL FROM 
@@ -534,7 +533,6 @@ class PlenarioETL(object):
         sel = select(from_vals, from_obj=self.src_table)
 
         bk = slugify(self.business_key)
-        # I think this relies on the columns being in the same order
         ins = self.dat_table.insert()\
             .from_select(
                 #

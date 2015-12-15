@@ -6,7 +6,7 @@ from plenario.utils.helpers import iter_column, slugify
 import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, update
 from geoalchemy2 import Geometry
 
 
@@ -242,6 +242,7 @@ class StagingTable(object):
         new_table = Table(self.meta.dataset_name, self.md, *(verbatim_cols + derived_cols))
         new_table.create(engine)
         self.insert_into(new_table)
+        self._null_malformed_geoms(new_table)
         return new_table
 
     def insert_into(self, existing):
@@ -267,4 +268,11 @@ class StagingTable(object):
         # Insert all the original and derived columns into the table
         ins = existing.insert().from_select(ins_cols, sel)
         engine.execute(ins)
+
+    @staticmethod
+    def _null_malformed_geoms(existing):
+        # We decide to set the geom to NULL when the given lon/lat is (0,0) (e.g. off the coast of Africa).
+        upd = existing.update().values(geom=None).\
+            where(existing.c.geom == select([func.ST_SetSRID(func.ST_MakePoint(0, 0), 4326)]))
+        engine.execute(upd)
 
