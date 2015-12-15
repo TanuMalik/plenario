@@ -163,6 +163,9 @@ class StagingTable(object):
         t = self.table
         m = self.meta
 
+        geom_func = self._geom_selectable()
+        date_col = self._date_selectable()
+
         # The select_from and where clauses ensure we're only looking at records
         # that don't have a unique ID that's present in the existing dataset.
         # From the set of records with new IDs, lump together the records with the same ID
@@ -173,7 +176,9 @@ class StagingTable(object):
                             # ... and rank by line number.
                                  order_by=t.columns['line_num'].desc()).
                             label('dup_ver'),
-                      t.c[m.business_key].label('id')]).\
+                      t.c[m.business_key].label('id'),
+                      geom_func.label('geom'),
+                      date_col.label('point_date')]).\
             select_from(t.outerjoin(existing, t.c[m.business_key] == existing.c.point_id)).\
             where(existing.c.point_id == None).\
             alias('id_cte')
@@ -207,10 +212,7 @@ class StagingTable(object):
     def insert_into(self, existing):
         # Generate table whose rows have an ID not present in the existing table
         # If there are duplicates in the staging table, grab the one lowest in the file
-
-        #date_col = self._date_selectable()
         id_cte = self._dup_ver_expr(existing)
-        geom_col = self._geom_selectable()
         new_cols = []
         for c in self.cols:
             if c.name == 'line_num':
@@ -220,18 +222,8 @@ class StagingTable(object):
             else:
                 new_cols.append(c)
 
-        #new_cols.append(geom_col)
-        # We'll be adding all the columns in the source dataset except for line_number
-        # And business_key will be there under a different name (point_id)
-        #source_cols = [c for c in self.cols if c.name not in ['line_num', self.meta.business_key]]
-        # We'll also add our derived columns for geometry, observation date, and unique ID.
-        #source_cols.append()
-        # Find business_key col
-        #for col in self.cols:
-        #    if col.name == self.meta.business_key:
+        new_cols += [id_cte.c.geom, id_cte.c.point_date]
 
-
-        #new_cols = source_cols   # [geom_col, date_col, id_col]
 
         # Only include rows that are of the lowest dup_ver
         # Need to exclude rows with business keys that were already present in the existing table
