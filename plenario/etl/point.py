@@ -1,13 +1,15 @@
 from plenario.etl.common import ETLFile
 from csvkit.unicsv import UnicodeCSVReader
 from sqlalchemy.exc import NoSuchTableError
-from plenario.database import app_engine as engine
+from plenario.database import app_engine as engine, session
 from plenario.utils.helpers import iter_column, slugify
 import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
-from sqlalchemy import select, func, text, update
+from sqlalchemy import select, func, text
 from geoalchemy2 import Geometry
+from plenario.models import MetaTable
+from datetime import datetime
 
 
 # Can move to common?
@@ -18,8 +20,6 @@ class PlenarioETLError(Exception):
 
 
 # Should StagingTable itself be a context manager? Probably.
-# Missing:  Removing rows with an empty business key
-#           Setting geometry coded to (0,0) to NULL
 class StagingTable(object):
     def __init__(self, meta, source_path=None):
         """
@@ -27,7 +27,7 @@ class StagingTable(object):
         :param source_path: path of source file on local filesystem
         :return:
         """
-        # Must change these var names
+        # TODO: Must change these var names
         self.meta = meta
         self.md = MetaData()
 
@@ -242,7 +242,6 @@ class StagingTable(object):
         new_table = Table(self.meta.dataset_name, self.md, *(verbatim_cols + derived_cols))
         new_table.create(engine)
         self.insert_into(new_table)
-        self._null_malformed_geoms(new_table)
         return new_table
 
     def insert_into(self, existing):
@@ -268,6 +267,7 @@ class StagingTable(object):
         # Insert all the original and derived columns into the table
         ins = existing.insert().from_select(ins_cols, sel)
         engine.execute(ins)
+        self._null_malformed_geoms(existing)
 
     @staticmethod
     def _null_malformed_geoms(existing):
@@ -276,3 +276,20 @@ class StagingTable(object):
             where(existing.c.geom == select([func.ST_SetSRID(func.ST_MakePoint(0, 0), 4326)]))
         engine.execute(upd)
 
+
+def update_meta(table):
+    record = MetaTable.get_by_dataset_name(table.name)
+    record.update_ingest_time()
+    record.obs_from, record.obs_to = session.query(func.min(table.c.point_date),
+                                                   func.max(table.c.point_date)).first()
+    record.bbox = session.query(func.ST_Envelope(func.ST_Union(table.c.geom)))
+    session.add(record)
+    try:
+        session.commit()
+    # TODO: Catch more specific
+    except Exception:
+        session.rollback()
+
+
+def update_joins(table):
+    pass

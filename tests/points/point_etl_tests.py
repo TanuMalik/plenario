@@ -21,6 +21,7 @@ def drop_if_exists(table_name):
     except NoSuchTableError:
         pass
 
+
 class StagingTableTests(TestCase):
     """
     Given a dataset is present in MetaTable,
@@ -61,10 +62,10 @@ class StagingTableTests(TestCase):
         cls.existing_table.create()
 
         ins = cls.existing_table.insert().values(point_id=1,
-                                                  point_date=date(2015, 1, 2),
-                                                  lon=-87.6495076896,
-                                                  lat=41.7915865543,
-                                                  geom=None)
+                                                 point_date=date(2015, 1, 2),
+                                                 lon=-87.6495076896,
+                                                 lat=41.7915865543,
+                                                 geom=None)
         app_engine.execute(ins)
 
     @classmethod
@@ -157,7 +158,7 @@ class StagingTableTests(TestCase):
         # With a fixture CSV that has one more column than the one that we inserted in the databse,
         # try to create the staging table and expect an Exception
         self.assert_(False)'''
-    
+
 
 class UpdateMetaTests(TestCase):
     pass

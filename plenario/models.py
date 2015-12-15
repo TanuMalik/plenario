@@ -192,6 +192,12 @@ class MetaTable(Base):
         # returns [lon, lat]
         return json.loads(result.first()[0])['coordinates']
 
+    def update_date_added(self):
+        now = datetime.now()
+        if self.date_added is None:
+            self.date_added = now
+        self.last_update = now
+
     def make_grid(self, resolution, geom=None, conditions=[]):
         """
         :param resolution: length of side of grid square in meters
