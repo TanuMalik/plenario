@@ -19,6 +19,21 @@ class PlenarioETLError(Exception):
         self.message = message
 
 
+class PlenarioETL(object):
+    def __init__(self, metadata, source_path=None):
+        self.metadata = metadata
+        self.staging_table = StagingTable(self.metadata, source_path=source_path)
+
+    def add(self):
+        new_table = self.staging_table.create_new()
+        update_meta(new_table)
+
+    def update(self):
+        existing_table = self.metadata.point_table
+        self.staging_table.insert_into(existing_table)
+        update_meta(existing_table)
+
+
 # Should StagingTable itself be a context manager? Probably.
 class StagingTable(object):
     def __init__(self, meta, source_path=None):
@@ -48,7 +63,7 @@ class StagingTable(object):
             if source_path:  # Local ingest
                 file_helper = ETLFile(source_path=source_path)
             else:  # Remote ingest
-                file_helper = ETLFile(source_url=meta.url)
+                file_helper = ETLFile(source_url=meta.source_url)
         # TODO: Handle more specific exception
         except Exception as e:
             raise PlenarioETLError(e)
@@ -279,17 +294,18 @@ class StagingTable(object):
 
 def update_meta(table):
     record = MetaTable.get_by_dataset_name(table.name)
-    record.update_ingest_time()
+    record.update_date_added()
     record.obs_from, record.obs_to = session.query(func.min(table.c.point_date),
                                                    func.max(table.c.point_date)).first()
-    record.bbox = session.query(func.ST_Envelope(func.ST_Union(table.c.geom)))
+    # Get an envelope over all points in the dataset as binary WKB
+    bbox = session.query(func.ST_SetSRID(
+                                         func.ST_Envelope(func.ST_Union(table.c.geom)),
+                                         4326
+                                         )).first()[0]
+    record.bbox = bbox
     session.add(record)
     try:
         session.commit()
     # TODO: Catch more specific
     except Exception:
         session.rollback()
-
-
-def update_joins(table):
-    pass

@@ -54,7 +54,7 @@ class MetaTable(Base):
                  is_socrata=False, approved_status=False,
                  contributed_data_types=None, update_freq='yearly',
                  latitude=None, longitude=None, location=None,
-                 attribution=None, description=None):
+                 attribution=None, description=None, **kwargs):
         """
         :param url: url where CSV or Socrata dataset with this dataset resides
         :param human_name: Nicely formatted name to display to people

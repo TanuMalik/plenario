@@ -75,5 +75,5 @@ class ETLFile(object):
         # Download and write to disk in 1MB chunks.
         for chunk in file_stream_request.iter_content(chunk_size=1024):
             if chunk:
-                self.handle.write(chunk)
-                self.handle.flush()
+                self._handle.write(chunk)
+                self._handle.flush()
