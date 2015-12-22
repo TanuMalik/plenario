@@ -88,19 +88,19 @@ class StagingTable(object):
         # Persist an empty table eagerly
         # so that we can access it when we drop down to a raw connection.
         s_table_name = 'staging_' + self.meta.dataset_name
-        # Test something out...
+
+        # Make a sequential primary key to track line numbers
         self.cols.append(Column('line_num', Integer, primary_key=True))
 
         table = Table(s_table_name, self.md, *self.cols, extend_existing=True)
+        # Dropping first because I haven't implmented a context manager for the staging table
         table.drop(bind=engine, checkfirst=True)
         table.create(bind=engine)
 
         # Fill in the columns we expect from the CSV.
-        # line_num will get a sequence by default.
         names = [c.name for c in self.cols if c.name != 'line_num']
         copy_st = "COPY {t_name} ({cols}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER ',')".\
             format(t_name=s_table_name, cols=', '.join(names))
-        # print copy_st
 
         # In order to issue a COPY, we need to drop down to the psycopg2 DBAPI.
         conn = engine.raw_connection()
@@ -114,7 +114,15 @@ class StagingTable(object):
         finally:
             conn.close()
 
+    @staticmethod
+    def _null_malformed_geoms(existing):
+        # We decide to set the geom to NULL when the given lon/lat is (0,0) (e.g. off the coast of Africa).
+        upd = existing.update().values(geom=None).\
+            where(existing.c.geom == select([func.ST_SetSRID(func.ST_MakePoint(0, 0), 4326)]))
+        engine.execute(upd)
+
     def _kill_dups(self, t):
+        # When a unique ID is duplicated, only retain the record with that ID found highest in the source file.
 
         del_stmt = '''
         DELETE FROM {table}
@@ -130,8 +138,6 @@ class StagingTable(object):
         except:
             session.rollback()
 
-
-    '''Three ways to make our columns.'''
     @staticmethod
     def _make_col(name, type, nullable):
         return Column(name, type, nullable=nullable)
@@ -139,24 +145,23 @@ class StagingTable(object):
     def _copy_col(self, col):
         return self._make_col(col.name, col.type, col.nullable)
 
+    '''Utility methods to generate columns into which we can dump the CSV data.'''
     def _from_ingested(self):
         """
-        :return: Columns that will match the table in its CSV form
+        Generate columns from the existing table.
         """
         ingested_cols = self.meta.column_info()
         # Don't include the geom and point_date columns.
         # They're derived from the source data and won't be present in the source CSV
         original_cols = [c for c in ingested_cols if c.name not in ['geom', 'point_date']]
-        # Finally, the point_id column is present in the source, but under its original name.
-        cols = [self._make_col(self.meta.business_key, c.type, c.nullable) if c.name == 'point_id'
-                else self._make_col(c.name, c.type, c.nullable)
-                for c in original_cols]
+        # Make copies that don't refer to the existing table.
+        cols = [self._copy_col(c) for c in original_cols]
 
         return cols
 
     def _from_inference(self, f):
         """
-        :param f: open file handle to CSV
+        Generate columns by scanning source CSV and inferring column types.
         """
         reader = UnicodeCSVReader(f)
         header = map(slugify, reader.next())
@@ -170,8 +175,14 @@ class StagingTable(object):
     def _from_contributed(self, data_types):
         """
         :param data_types: List of dictionaries, each of which has 'field_name' and 'data_type' fields.
+
+        Generate columns from user-given specifications.
+        (Warning: assumes user has completely specified every column.
+        We don't support mixing inferred and user-specified columns.)
         """
-        COL_TYPES = {
+        # The keys in this mapping are taken from the frontend form
+        # where users can specify column types.
+        col_types = {
             'boolean': Boolean,
             'integer': Integer,
             'big_integer': BigInteger,
@@ -183,7 +194,7 @@ class StagingTable(object):
             'datetime': TIMESTAMP,
         }
 
-        cols = [self._make_col(c['field_name'], COL_TYPES[c['data_type']], True) for c in data_types]
+        cols = [self._make_col(c['field_name'], col_types[c['data_type']], True) for c in data_types]
         return cols
 
     def _date_selectable(self):
@@ -243,24 +254,27 @@ class StagingTable(object):
         cte = select([t.c[m.business_key].label('id'),
                       geom_sel.label('geom'),
                       date_sel.label('point_date')]).\
-            select_from(t.outerjoin(existing, t.c[m.business_key] == existing.c.point_id)).\
-            where(existing.c.point_id == None).\
+            select_from(t.outerjoin(existing, t.c[m.business_key] == existing.c[m.business_key])).\
+            where(existing.c[m.business_key] == None).\
             distinct().\
             alias('id_cte')
 
         return cte
 
     def create_new(self):
-        # The columns we're taking straight from the source file
+        # Take most columns straight from the source.
         verbatim_cols = []
         for c in self.cols:
-            if c.name != 'line_num':
-                if c.name == self.meta.business_key:
-                    # On second thought, imposing the point_id name was a mistake.
-                    verbatim_cols.append(Column('point_id', c.type, primary_key=True))
-                else:
-                    verbatim_cols.append(self._copy_col(c))
+            if c.name == 'line_num':
+                # We only created line_num to deduplicate. Don't include it in our canonical table.
+                continue
+            elif c.name == self.meta.business_key:
+                # The business_key will be our unique ID
+                verbatim_cols.append(Column(c.name, c.type, primary_key=True))
+            else:
+                verbatim_cols.append(self._copy_col(c))
 
+        # Create geometry and timestamp columns
         derived_cols = [
             Column('point_date', TIMESTAMP, nullable=False),
             Column('geom', Geometry('POINT', srid=4326), nullable=True)
@@ -268,22 +282,17 @@ class StagingTable(object):
 
         new_table = Table(self.meta.dataset_name, self.md, *(verbatim_cols + derived_cols))
         new_table.create(engine)
+
+        # Ask the staging table to insert its new columns into the newly created table.
         self.insert_into(new_table)
         return new_table
 
     def insert_into(self, existing):
         # Generate table whose rows have an ID not present in the existing table
         cte = self._derived_cte(existing)
-        ins_cols = []
-        for c in self.cols:
-            if c.name == 'line_num':
-                continue
-            elif c.name == self.meta.business_key:
-                # Will need to remove this to avoid renaming to point_id
-                ins_cols.append(c.label('point_id'))
-            else:
-                ins_cols.append(c)
-
+        # Original cols
+        ins_cols = [c for c in self.cols if c.name != 'line_num']
+        # Derived cols
         ins_cols += [cte.c.geom, cte.c.point_date]
 
         # The cte only includes rows with business keys that weren't present in the existing table
@@ -295,13 +304,6 @@ class StagingTable(object):
         ins = existing.insert().from_select(ins_cols, sel)
         engine.execute(ins)
         self._null_malformed_geoms(existing)
-
-    @staticmethod
-    def _null_malformed_geoms(existing):
-        # We decide to set the geom to NULL when the given lon/lat is (0,0) (e.g. off the coast of Africa).
-        upd = existing.update().values(geom=None).\
-            where(existing.c.geom == select([func.ST_SetSRID(func.ST_MakePoint(0, 0), 4326)]))
-        engine.execute(upd)
 
 
 def update_meta(table):

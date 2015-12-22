@@ -53,7 +53,7 @@ class StagingTableTests(TestCase):
         # For one of those entries, create a point table in the database (we'll eschew the dat_ convention)
         drop_if_exists('dog_park_permits')
         cls.existing_table = sa.Table('dog_park_permits', Base.metadata,
-                                      Column('point_id', Integer, primary_key=True),
+                                      Column('hooded_figure_id', Integer, primary_key=True),
                                       Column('point_date', TIMESTAMP, nullable=False),
                                       Column('date', Date, nullable=True),
                                       Column('lat', Float, nullable=False),
@@ -61,7 +61,7 @@ class StagingTableTests(TestCase):
                                       Column('geom', Geometry('POINT', srid=4326), nullable=True))
         cls.existing_table.create()
 
-        ins = cls.existing_table.insert().values(point_id=1,
+        ins = cls.existing_table.insert().values(hooded_figure_id=1,
                                                  point_date=date(2015, 1, 2),
                                                  lon=-87.6495076896,
                                                  lat=41.7915865543,
@@ -129,7 +129,8 @@ class StagingTableTests(TestCase):
         staging = StagingTable(self.existing_meta, source_path=self.dog_path)
         existing = self.existing_table
         staging.insert_into(existing)
-        pre_existing_row = session.execute(existing.select().where(existing.c.point_id == 1)).fetchone()
+        pre_existing_row = session.execute(existing.select()
+                                           .where(existing.c[self.existing_meta.business_key] == 1)).fetchone()
         self.assertEqual(date(2015, 1, 2), pre_existing_row.point_date.date())
 
         all_rows = session.execute(existing.select()).fetchall()
