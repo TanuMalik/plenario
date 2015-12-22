@@ -1,10 +1,6 @@
 import tempfile
 
 import requests
-from boto.s3.connection import S3Connection
-from boto.s3.key import Key
-
-from plenario.settings import AWS_ACCESS_KEY, AWS_SECRET_KEY, S3_BUCKET
 
 
 class ETLFile(object):

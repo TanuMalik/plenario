@@ -11,7 +11,7 @@ from plenario import create_app
 from plenario.database import session, app_engine as engine
 from plenario.etl.shape import ShapeETL
 from plenario.models import MetaTable, ShapeMetadata
-from plenario.utils.etl import PlenarioETL
+from plenario.etl.point import PlenarioETL
 from plenario.utils.shapefile import Shapefile
 
 pwd = os.path.dirname(os.path.realpath(__file__))

@@ -11,7 +11,7 @@ from plenario.database import task_session as session, task_engine as engine, \
 from plenario.etl.shape import ShapeETL
 from plenario.models import MetaTable, MasterTable, ShapeMetadata
 from plenario.settings import CELERY_SENTRY_URL
-from plenario.utils.etl import PlenarioETL
+from plenario.etl.point import PlenarioETL
 from plenario.utils.weather import WeatherETL
 
 if CELERY_SENTRY_URL:
@@ -52,7 +52,8 @@ def add_dataset(self, source_url_hash, s3_path=None, data_types=None):
         c.execute(MetaTable.__table__.update()\
             .where(MetaTable.source_url_hash == source_url_hash)\
             .values(result_ids=ids))
-    etl = PlenarioETL(md.as_dict(), data_types=data_types)
+    md.contributed_data_types = data_types
+    etl = PlenarioETL(md)
     etl.add(s3_path=s3_path)
     return 'Finished adding {0} ({1})'.format(md.human_name, md.source_url_hash)
 

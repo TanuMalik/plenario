@@ -106,7 +106,6 @@ class TimeseriesRegressionTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Commented out to keep test DB the same while I run tests after running migrations
         tables_to_drop = [
             'flu_shot_clinic_locations',
             'chicago_landmark_locations',
