@@ -6,7 +6,7 @@ from plenario.utils.helpers import iter_column, slugify
 import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, delete
 from geoalchemy2 import Geometry
 from plenario.models import MetaTable
 from datetime import datetime
@@ -76,6 +76,7 @@ class StagingTable(object):
             # Grab the handle to build a table from the CSV
             try:
                 self.table = self._make_table(file_helper.handle)
+                self._kill_dups(self.table)
                 # Remove malformed rows (by business logic) here.
             except Exception as e:
                 # Some stuff that could happen:
@@ -113,6 +114,23 @@ class StagingTable(object):
             raise PlenarioETLError(e)
         finally:
             conn.close()
+
+    def _kill_dups(self, t):
+
+        del_stmt = '''
+        DELETE FROM {table}
+        WHERE line_num NOT IN (
+          SELECT MIN(line_num) FROM {table}
+          GROUP BY {bk}
+        )
+        '''.format(table=t.name, bk=self.meta.business_key)
+
+        session.execute(del_stmt)
+        try:
+            session.commit()
+        except:
+            session.rollback()
+
 
     '''Three ways to make our columns.'''
     @staticmethod
@@ -178,16 +196,6 @@ class StagingTable(object):
         return func.cast(self.table.c[self.meta.observed_date], TIMESTAMP).\
                 label('point_date')
 
-    def _dup_ver_selectable(self):
-        """
-        Make a selectable that groups together all records in the source dataset having the same unique ID
-        and labels each member of the group with a duplicate version number.
-        1 for the version highest in the source file.
-        """
-        return func.rank().\
-            over(partition_by=self.table.c[self.meta.business_key],
-                 order_by=self.table.columns['line_num'].desc())
-
     def _geom_selectable(self):
         """
         Derive selectable with a PostGIS point in 4326 (naive lon-lat) projection
@@ -222,32 +230,34 @@ class StagingTable(object):
 
         geom_sel = self._geom_selectable()
         date_sel = self._date_selectable()
-        dup_sel = self._dup_ver_selectable()
 
         # The select_from and where clauses ensure we're only looking at records
         # that don't have a unique ID that's present in the existing dataset.
         #
-        # From the set of records with new IDs, group together the records with the same ID
-        # and assign a dup_ver to each, with 1 going to the record highest in the source file.
+        # From the records with an ID not in the existing dataset,
+        # generate new columns with a geom and timestamp.
         #
         # Finally, include the id itself in the common table expression to join to the staging table.
-        cte = select([dup_sel.label('dup_ver'),
-                      t.c[m.business_key].label('id'),
+        cte = select([t.c[m.business_key].label('id'),
                       geom_sel.label('geom'),
                       date_sel.label('point_date')]).\
             select_from(t.outerjoin(existing, t.c[m.business_key] == existing.c.point_id)).\
             where(existing.c.point_id == None).\
+            distinct().\
             alias('id_cte')
 
         return cte
 
     def create_new(self):
         # The columns we're taking straight from the source file
-        # This listcomp got out of hand
-        verbatim_cols = [self._copy_col(c) if c.name != self.meta.business_key
-                         else Column('point_id', c.type, primary_key=True)
-                         for c in self.cols
-                         if c.name != 'line_num']
+        verbatim_cols = []
+        for c in self.cols:
+            if c.name != 'line_num':
+                if c.name == self.meta.business_key:
+                    # On second thought, imposing the point_id name was a mistake.
+                    verbatim_cols.append(Column('point_id', c.type, primary_key=True))
+                else:
+                    verbatim_cols.append(self._copy_col(c))
 
         derived_cols = [
             Column('point_date', TIMESTAMP, nullable=False),
@@ -278,7 +288,7 @@ class StagingTable(object):
         # Here, we also restrict our selection to rows that are of the lowest dup_ver (highest in the source file)
         sel = select(ins_cols).\
             select_from(cte.join(self.table, cte.c.id == self.table.c[self.meta.business_key])).\
-            where(cte.c.dup_ver == 1)
+            where(cte.c.point_date != None)
         # Insert all the original and derived columns into the table
         ins = existing.insert().from_select(ins_cols, sel)
         engine.execute(ins)
