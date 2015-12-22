@@ -97,6 +97,7 @@ class MetaTable(Base):
         # Can be None. In practice, frontend validation makes sure these are always passed along.
         self.description, self.attribution = description, attribution
         self.is_socrata_source = is_socrata
+        self.contributed_data_types = contributed_data_types
 
         # This boolish value is stored as a string in the DB.
         self.approved_status = str(approved_status)

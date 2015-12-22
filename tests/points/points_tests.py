@@ -87,6 +87,7 @@ class GridTests(unittest.TestCase):
         query = 'v1/api/grid/?obs_date__ge=2013-1-1&obs_date_le=2014-1-1&dataset_name=flu_shot_clinics&location_geom__within=' + escaped_query_rect
         resp = self.app.get(query)
         response_data = json.loads(resp.data)
+        print response_data
         self.assertEqual(len(response_data['features']), 4)
 
         # Each feature should have an associated square geometry with 5 points
@@ -123,7 +124,7 @@ class TimeseriesRegressionTests(unittest.TestCase):
         except NoSuchTableError:
             create_dummy_census_table()
 
-        #ingest_online_from_fixture(flu_shot_meta)
+        ingest_online_from_fixture(flu_shot_meta)
         ingest_online_from_fixture(landmarks_meta)
 
         cls.app = create_app().test_client()
