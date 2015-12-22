@@ -208,6 +208,9 @@ class StagingTable(object):
                                        4326)
 
         elif m.location:
+            # I had trouble handling postgres arrays in SQLAlchemy, so I used raw SQL here.
+            # (The two capture groups from the regex get returned as an array)
+            # (Also - NB - postgres arrays are 1-indexed!)
             geom_col = text(
                     '''SELECT ST_PointFromText('POINT(' || subq.lon || ' ' || subq.lat || ')', 4326) \
                           FROM (SELECT a[1] AS lon, a[2] AS lat
@@ -270,13 +273,13 @@ class StagingTable(object):
 
     def insert_into(self, existing):
         # Generate table whose rows have an ID not present in the existing table
-        # If there are duplicates in the staging table, grab the one lowest in the file
         cte = self._derived_cte(existing)
         ins_cols = []
         for c in self.cols:
             if c.name == 'line_num':
                 continue
             elif c.name == self.meta.business_key:
+                # Will need to remove this to avoid renaming to point_id
                 ins_cols.append(c.label('point_id'))
             else:
                 ins_cols.append(c)

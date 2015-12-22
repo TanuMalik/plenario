@@ -1,5 +1,4 @@
 import tempfile
-
 import requests
 
 
@@ -36,6 +35,8 @@ class ETLFile(object):
         # Return the whole ETLFile so that the `with foo as bar:` syntax looks right.
         return self
 
+    # Users of the class were seeking to 0 all the time after they grabbed the handle.
+    # Moved it here so clients are always pointed to 0 when they get handle
     @property
     def handle(self):
         self._handle.seek(0)
