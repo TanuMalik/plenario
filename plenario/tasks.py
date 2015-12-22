@@ -2,14 +2,12 @@ from datetime import datetime, timedelta
 
 from raven.conf import setup_logging
 from raven.handlers.logging import SentryHandler
-from sqlalchemy import Table
 from sqlalchemy.exc import NoSuchTableError, InternalError
 
 from plenario.celery_app import celery_app
-from plenario.database import task_session as session, task_engine as engine, \
-    Base
+from plenario.database import session as session, app_engine as engine
 from plenario.etl.shape import ShapeETL
-from plenario.models import MetaTable, MasterTable, ShapeMetadata
+from plenario.models import MetaTable, ShapeMetadata
 from plenario.settings import CELERY_SENTRY_URL
 from plenario.etl.point import PlenarioETL
 from plenario.utils.weather import WeatherETL
@@ -22,22 +20,16 @@ if CELERY_SENTRY_URL:
 def delete_dataset(self, source_url_hash):
     md = session.query(MetaTable).get(source_url_hash)
     try:
-        dat_table = Table('dat_%s' % md.dataset_name, Base.metadata, 
-            autoload=True, autoload_with=engine, keep_existing=True)
+        dat_table = md.point_table
         dat_table.drop(engine, checkfirst=True)
     except NoSuchTableError:
+        # Move on so we can get rid of the metadata
         pass
-    master_table = MasterTable.__table__
-    delete = master_table.delete()\
-        .where(master_table.c.dataset_name == md.dataset_name)
-    conn = engine.contextual_connect()
+    session.delete(md)
     try:
-        conn.execute(delete)
-        session.delete(md)
         session.commit()
     except InternalError, e:
         raise delete_dataset.retry(exc=e)
-    conn.close()
     return 'Deleted {0} ({1})'.format(md.human_name, md.source_url_hash)
 
 @celery_app.task(bind=True)
