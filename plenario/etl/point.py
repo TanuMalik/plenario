@@ -197,6 +197,8 @@ class StagingTable(object):
         cols = [self._make_col(c['field_name'], col_types[c['data_type']], True) for c in data_types]
         return cols
 
+    '''Construct derived columns for the canonical table.'''
+
     def _date_selectable(self):
         """
         Make a selectable where we take the dataset's temporal column
@@ -262,6 +264,9 @@ class StagingTable(object):
         return cte
 
     def create_new(self):
+        """
+        Make a new table and insert every record from the staging table into it.
+        """
         # Take most columns straight from the source.
         verbatim_cols = []
         for c in self.cols:
@@ -288,25 +293,34 @@ class StagingTable(object):
         return new_table
 
     def insert_into(self, existing):
-        # Generate table whose rows have an ID not present in the existing table
-        cte = self._derived_cte(existing)
-        # Original cols
-        ins_cols = [c for c in self.cols if c.name != 'line_num']
-        # Derived cols
-        ins_cols += [cte.c.geom, cte.c.point_date]
+        """
+        Insert new columns from staging table into a table that already exists in Plenario.
 
-        # The cte only includes rows with business keys that weren't present in the existing table
-        # Here, we also restrict our selection to rows that are of the lowest dup_ver (highest in the source file)
+        :param existing: Point table that has been persisted to the DB.
+        """
+        derived = self._derived_cte(existing)
+        # Insert into the canonical table the original cols
+        ins_cols = [c for c in self.cols if c.name != 'line_num']
+        # ... and the derived cols
+        ins_cols += [derived.c.geom, derived.c.point_date]
+
+        # The cte only includes rows with business keys that weren't present in the existing table.
         sel = select(ins_cols).\
-            select_from(cte.join(self.table, cte.c.id == self.table.c[self.meta.business_key])).\
-            where(cte.c.point_date != None)
-        # Insert all the original and derived columns into the table
+            select_from(derived.join(self.table, derived.c.id == self.table.c[self.meta.business_key])).\
+            where(derived.c.point_date != None)  # Also, filter out rows with a null date.
+
         ins = existing.insert().from_select(ins_cols, sel)
+        # TODO: Catch SQL error
         engine.execute(ins)
         self._null_malformed_geoms(existing)
 
 
 def update_meta(table):
+    """
+    After ingest/update, update the metadata registry to reflect
+    :param table:
+    :return:
+    """
     record = MetaTable.get_by_dataset_name(table.name)
     record.update_date_added()
     record.obs_from, record.obs_to = session.query(func.min(table.c.point_date),
