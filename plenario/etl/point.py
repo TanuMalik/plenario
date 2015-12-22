@@ -6,10 +6,9 @@ from plenario.utils.helpers import iter_column, slugify
 import json
 from sqlalchemy import Boolean, Integer, BigInteger, Float, String, Date, TIME, TIMESTAMP,\
     Table, Column, MetaData
-from sqlalchemy import select, func, text, delete
+from sqlalchemy import select, func, text
 from geoalchemy2 import Geometry
 from plenario.models import MetaTable
-from datetime import datetime
 
 
 # Can move to common?
