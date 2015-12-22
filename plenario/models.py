@@ -111,6 +111,10 @@ class MetaTable(Base):
     def column_info(self):
         return self.point_table.c
 
+    def id_col(self):
+        # The unique ID column of a point dataset is specified by the user. Get it by name.
+        return self.point_table.c[self.business_key]
+
     @property
     def point_table(self):
         try:
@@ -199,6 +203,8 @@ class MetaTable(Base):
             self.date_added = now
         self.last_update = now
 
+
+
     def make_grid(self, resolution, geom=None, conditions=[]):
         """
         :param resolution: length of side of grid square in meters
@@ -219,7 +225,7 @@ class MetaTable(Base):
 
         # Generate a count for each resolution by resolution square
         t = self.point_table
-        q = session.query(func.count(t.c.point_id),
+        q = session.query(func.count(t.id_col()),
                           func.ST_SnapToGrid(t.c.geom, size_x, size_y).label('squares'))\
             .filter(*conditions)\
             .group_by('squares')
@@ -248,7 +254,7 @@ class MetaTable(Base):
 
         # Create a CTE that grabs the number of records contained in each time bucket.
         # Will only have rows for buckets with records.
-        actuals = select([func.count(t.c.point_id).label('count'),  # Count unique records
+        actuals = select([func.count(t.id_col()).label('count'),  # Count unique records
                           func.date_trunc(agg_unit, t.c.point_date).label('time_bucket')])\
             .where(sa.and_(t.c.point_date >= start,            # Only include records in time window
                            t.c.point_date <= end))\
