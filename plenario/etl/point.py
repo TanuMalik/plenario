@@ -47,7 +47,6 @@ class StagingTable(object):
 
         # Get the Columns to construct our table
         try:
-            # Problem: Does call to model mix SQLAlchemy sessions?
             self.cols = self._from_ingested()
         except NoSuchTableError:
             # This must be the first time we're ingesting the table
@@ -76,12 +75,10 @@ class StagingTable(object):
             try:
                 self.table = self._make_table(file_helper.handle)
                 self._kill_dups(self.table)
-                # Remove malformed rows (by business logic) here.
             except Exception as e:
                 # Some stuff that could happen:
                     # There could be more columns in the source file than we expected.
                     # Some input could be malformed.
-                # Can we check here to see if uniqueness constraint was violated?
                 raise PlenarioETLError(e)
 
     def _make_table(self, f):
@@ -237,8 +234,9 @@ class StagingTable(object):
 
     def _derived_cte(self, existing):
         """
-        Construct a gnarly Common Table Expression that generates all of the columns
-        that we want to derive from
+        Construct a subquery that generates date and geometry columns
+        derived from the staging table.
+        But only for entirely new columns.
         """
         t = self.table
         m = self.meta
@@ -325,7 +323,6 @@ def update_meta(table):
     record.update_date_added()
     record.obs_from, record.obs_to = session.query(func.min(table.c.point_date),
                                                    func.max(table.c.point_date)).first()
-    # Get an envelope over all points in the dataset as binary WKB
     bbox = session.query(func.ST_SetSRID(
                                          func.ST_Envelope(func.ST_Union(table.c.geom)),
                                          4326

@@ -163,7 +163,3 @@ class StagingTableTests(TestCase):
 
 class UpdateMetaTests(TestCase):
     pass
-
-
-class UpdateJoinsTests(TestCase):
-    pass

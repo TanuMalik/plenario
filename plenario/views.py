@@ -1,6 +1,6 @@
 from flask import make_response, request, redirect, url_for, render_template, current_app, g, \
     Blueprint, flash, session as flask_session
-from plenario.models import MasterTable, MetaTable, User, ShapeMetadata
+from plenario.models import MetaTable, User, ShapeMetadata
 from plenario.database import session, Base, app_engine as engine
 from plenario.utils.helpers import get_socrata_data_info, iter_column, send_mail, slugify
 from plenario.tasks import update_dataset as update_dataset_task, \
