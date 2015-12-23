@@ -107,8 +107,8 @@ class TimeseriesRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tables_to_drop = [
-            'flu_shot_clinic_locations',
-            'chicago_landmark_locations',
+            'flu_shot_clinics',
+            'landmarks',
             'dat_master',
             'meta_master',
             'plenario_user'
